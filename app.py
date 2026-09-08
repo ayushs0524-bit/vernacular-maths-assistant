@@ -6,6 +6,7 @@ import hashlib
 import os
 from io import BytesIO
 from pathlib import Path
+import base64
 import tempfile
 import wave
 import requests
@@ -1277,28 +1278,63 @@ def transcribe_hindi_voice(audio_file):
 # ============================================================
 
 def generate_hindi_audio(text):
+    """
+    Generate Hindi audio with Sarvam Bulbul v3.
+
+    Bulbul v3 does NOT support Santali (sat-IN), so this function
+    intentionally generates Hindi audio for the Hindi explanation.
+
+    Sarvam REST TTS returns audio as a base64-encoded string inside
+    `response.audios`. Streamlit needs the decoded bytes.
+    """
 
     if not sarvam_available:
-
         return None, "Sarvam AI is not connected."
 
-    try:
+    if not text or not text.strip():
+        return None, "There is no explanation text to speak."
 
-        audio = (
+    try:
+        audio_response = (
             sarvam_client
             .text_to_speech
             .convert(
-                text=text,
+                text=text.strip()[:2500],
                 model="bulbul:v3",
                 language_code="hi-IN",
-                speaker="priya"
+                speaker="priya",
+                output_audio_codec="wav",
+                speech_sample_rate=24000
             )
         )
 
-        return audio, None
+        if not hasattr(audio_response, "audios"):
+            return None, "Sarvam TTS returned no audio data."
+
+        audios = audio_response.audios
+
+        if not audios:
+            return None, "Sarvam TTS returned an empty audio response."
+
+        audio_item = audios[0]
+
+        # Sarvam returns base64-encoded audio for REST TTS.
+        if isinstance(audio_item, str):
+            try:
+                audio_bytes = base64.b64decode(audio_item, validate=True)
+            except Exception as e:
+                return None, f"Could not decode Sarvam audio: {e}"
+        elif isinstance(audio_item, bytes):
+            audio_bytes = audio_item
+        else:
+            return None, "Sarvam returned an unsupported audio format."
+
+        if not audio_bytes:
+            return None, "Sarvam returned empty audio."
+
+        return audio_bytes, None
 
     except Exception as e:
-
         return None, str(e)
 
 
@@ -1345,6 +1381,7 @@ with st.sidebar:
         ✅ Hindi → Santali  
         ✅ Saaras Speech-to-Text  
         ✅ Bulbul Hindi Voice Output  
+        ℹ️ Santali text-to-speech is not available in Bulbul v3  
         ✅ Local RAG  
         ✅ Curriculum Alignment  
         ✅ Worksheet Generation  
@@ -1578,7 +1615,7 @@ if generate_button:
         # ----------------------------------------------------
 
         st.subheader(
-            "🔊 Listen to Explanation"
+            "🔊 Listen to Hindi Explanation"
         )
 
         # We speak the Hindi explanation because
@@ -1596,47 +1633,17 @@ if generate_button:
 
         if audio_output:
 
-            # Depending on SDK response shape,
-            # audio_output may expose .audios.
+            # generate_hindi_audio() already decoded Sarvam's
+            # base64 response into real WAV bytes.
+            st.audio(
+                audio_output,
+                format="audio/wav"
+            )
 
-            try:
-
-                if hasattr(
-                    audio_output,
-                    "audios"
-                ):
-
-                    audio_bytes = (
-                        audio_output.audios[0]
-                    )
-
-                    st.audio(
-                        audio_bytes,
-                        format="audio/wav"
-                    )
-
-                elif isinstance(
-                    audio_output,
-                    bytes
-                ):
-
-                    st.audio(
-                        audio_output,
-                        format="audio/wav"
-                    )
-
-                else:
-
-                    st.info(
-                        "Audio generated successfully."
-                    )
-
-            except Exception:
-
-                st.warning(
-                    "Audio generated, "
-                    "but could not be displayed."
-                )
+            st.caption(
+                "🔊 Hindi voice output — Santali text is shown above. "
+                "Sarvam Bulbul v3 currently does not provide Santali TTS."
+            )
 
         else:
 
@@ -2058,3 +2065,4 @@ st.markdown(
     """,
     unsafe_allow_html=True
 )
+
