@@ -750,11 +750,58 @@ with st.sidebar:
 
 st.header("🧮 AI Maths Assistant")
 
-question = st.text_area(
+# --------------------------------------------------
+# QUESTION INPUT
+# --------------------------------------------------
+
+st.subheader("⌨️ Type Your Question")
+
+typed_question = st.text_area(
     "Enter a Class 3 maths question in Hindi",
     placeholder="उदाहरण: 25 और 17 को जोड़ने पर कितना होगा?",
     height=120
 )
+
+st.subheader("🎤 Or Ask by Voice")
+
+audio = st.audio_input(
+    "Record your Hindi maths question"
+)
+
+voice_question = None
+
+if audio is not None:
+
+    with st.spinner("🎧 Converting your voice to Hindi text..."):
+
+        voice_question, voice_error = (
+            transcribe_hindi_voice(audio)
+        )
+
+    if voice_question:
+
+        st.success("✅ Voice converted successfully!")
+
+        st.markdown("### 🗣️ You said:")
+
+        st.info(voice_question)
+
+    else:
+
+        st.error(
+            f"Voice transcription failed: {voice_error}"
+        )
+
+
+# --------------------------------------------------
+# SELECT QUESTION
+# --------------------------------------------------
+
+if voice_question:
+    question = voice_question
+else:
+    question = typed_question
+
 
 generate_button = st.button(
     "🚀 Generate Explanation",
@@ -1090,3 +1137,27 @@ if audio is not None:
 
     except Exception as e:
         st.error(f"Voice processing failed: {e}")
+
+# --------------------------------------------------
+# HINDI VOICE → TEXT
+# --------------------------------------------------
+
+def transcribe_hindi_voice(audio_file):
+
+    if not sarvam_available:
+        return None, "Sarvam AI is not connected."
+
+    try:
+
+        response = sarvam_client.speech_to_text.transcribe(
+            file=audio_file,
+            model="saaras:v3",
+            language_code="hi-IN",
+            mode="transcribe"
+        )
+
+        return response.transcript, None
+
+    except Exception as e:
+        return None, str(e)
+    
