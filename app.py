@@ -27,7 +27,7 @@ DATA_FILE = "Hindi_Santali_Maths_Dataset_Starter.xlsx"
 # ============================================================
 
 try:
-    sarvam_key = st.secrets["SARVAM_API_KEY"]
+    sarvam_key = st.secrets["sk_p87syka3_uMW7J8EipungKX3djRZb4a8x"]
 
     sarvam_client = SarvamAI(
         api_subscription_key=sarvam_key
@@ -37,13 +37,11 @@ try:
     sarvam_error = None
 
 except Exception as e:
+
     sarvam_client = None
     sarvam_available = False
     sarvam_error = str(e)
 
-if not sarvam_available:
-    st.sidebar.error("Sarvam API not configured")
-    st.sidebar.caption(f"Debug: {sarvam_error}")
 
 # ============================================================
 # LOAD DATASET
@@ -57,8 +55,7 @@ def load_data():
         sheet_name="Core_Seed_300"
     )
 
-    # Prototype scope:
-    # Class 3 Mathematics only
+    # Prototype scope: Class 3 Mathematics
     df = df[df["Class"] == 3].copy()
 
     return df
@@ -101,111 +98,94 @@ def find_match(text):
 
 
 # ============================================================
-# SIMPLE MATH CALCULATOR
+# AI PEDAGOGY ENGINE
 # ============================================================
 
-def calculate_expression(text):
+def generate_ai_explanation(question):
 
-    """
-    Supports simple expressions such as:
+    if not sarvam_available:
 
-    2 + 3
-    8 - 5
-    3 * 4
-    3 x 4
-    12 / 3
-    """
-
-    match = re.search(
-        r"(\d+)\s*([+\-*x×÷/])\s*(\d+)",
-        text
-    )
-
-    if not match:
-        return None
-
-    a = int(match.group(1))
-    operator = match.group(2)
-    b = int(match.group(3))
-
-    if operator == "+":
-
-        result = a + b
-
-    elif operator == "-":
-
-        result = a - b
-
-    elif operator in ("*", "x", "×"):
-
-        result = a * b
-
-    elif operator in ("/", "÷"):
-
-        if b == 0:
-            return None
-
-        result = a / b
-
-        if result.is_integer():
-            result = int(result)
-
-    else:
-
-        return None
-
-    return a, operator, b, result
+        return None, f"Sarvam API is not configured: {sarvam_error}"
 
 
-# ============================================================
-# HINDI PEDAGOGY / EXPLANATION
-# ============================================================
+    system_prompt = """
+You are an expert primary-school mathematics teacher.
 
-def generate_hindi_explanation(question):
+Your job is to explain Class 3 Mathematics questions to
+children in simple Hindi.
 
-    calculation = calculate_expression(question)
+Follow these rules:
 
-    if calculation:
+1. Use very simple, child-friendly Hindi.
+2. Explain the concept step by step.
+3. Do not use advanced mathematical terminology.
+4. Clearly show the calculation.
+5. Give the final answer clearly.
+6. Keep the explanation concise.
+7. Use familiar examples when useful.
+8. Never invent information that is not required.
+9. Make sure the mathematical answer is correct.
 
-        a, operator, b, result = calculation
+Format your response like this:
 
-        operator_words = {
+समझते हैं:
+<simple explanation>
 
-            "+": "जोड़ने",
-            "-": "घटाने",
-            "*": "गुणा करने",
-            "x": "गुणा करने",
-            "×": "गुणा करने",
-            "/": "भाग देने",
-            "÷": "भाग देने"
+हल:
+<step-by-step calculation>
 
-        }
+उत्तर:
+<final answer>
+"""
 
-        operation = operator_words[operator]
+
+    user_prompt = f"""
+This is a Class 3 Mathematics question:
+
+{question}
+
+Explain and solve it for a Class 3 student.
+"""
+
+
+    try:
+
+        response = sarvam_client.chat.completions(
+
+            model="sarvam-105b",
+
+            messages=[
+                {
+                    "role": "system",
+                    "content": system_prompt
+                },
+                {
+                    "role": "user",
+                    "content": user_prompt
+                }
+            ],
+
+            temperature=0.2,
+
+            max_tokens=500,
+
+            reasoning_effort=None
+        )
+
 
         explanation = (
-            f"{a} और {b} को {operation} पर "
-            f"{result} प्राप्त होता है।"
+            response
+            .choices[0]
+            .message
+            .content
         )
 
-        return explanation
+        return explanation, None
 
-    match = find_match(question)
 
-    if match is not None:
+    except Exception as e:
 
-        topic = clean(match["Topic"])
-
-        return (
-            f"यह प्रश्न Class 3 Mathematics के "
-            f"{topic} topic से संबंधित है।"
-        )
-
-    return (
-        "यह प्रश्न अभी हमारे छोटे prototype knowledge base "
-        "में उपलब्ध नहीं है। आगे AI pedagogy engine के माध्यम से "
-        "इसे सरल और उम्र-उपयुक्त तरीके से समझाया जाएगा।"
-    )
+        return None, str(e)
 
 
 # ============================================================
@@ -218,6 +198,7 @@ def translate_to_santali(hindi_text):
 
         return None, "Sarvam API is not configured correctly."
 
+
     try:
 
         response = sarvam_client.text.translate(
@@ -229,10 +210,11 @@ def translate_to_santali(hindi_text):
             target_language_code="sat-IN",
 
             model="sarvam-translate:v1"
-
         )
 
+
         return response.translated_text, None
+
 
     except Exception as e:
 
@@ -240,20 +222,88 @@ def translate_to_santali(hindi_text):
 
 
 # ============================================================
+# PRACTICE QUESTION GENERATOR
+# ============================================================
+
+def generate_practice_question(question):
+
+    if not sarvam_available:
+
+        return None
+
+
+    prompt = f"""
+Create ONE similar Class 3 Mathematics practice question
+based on this original question:
+
+{question}
+
+Rules:
+- Keep it suitable for Class 3.
+- Use simple Hindi.
+- Change the numbers.
+- Test the same mathematical concept.
+- Do NOT provide the answer.
+- Return only the question.
+"""
+
+
+    try:
+
+        response = sarvam_client.chat.completions(
+
+            model="sarvam-105b",
+
+            messages=[
+                {
+                    "role": "system",
+                    "content":
+                    "You create simple Class 3 Mathematics practice questions."
+                },
+                {
+                    "role": "user",
+                    "content": prompt
+                }
+            ],
+
+            temperature=0.4,
+
+            max_tokens=150,
+
+            reasoning_effort=None
+        )
+
+
+        return (
+            response
+            .choices[0]
+            .message
+            .content
+            .strip()
+        )
+
+
+    except Exception:
+
+        return None
+
+
+# ============================================================
 # MAIN UI
 # ============================================================
 
-st.title("📚 AI Vernacular Maths Assistant")
+st.title(
+    "📚 AI Vernacular Maths Assistant"
+)
 
 st.caption(
-    "Prototype • Class 3 Mathematics • Hindi → Santali"
+    "AI-powered pedagogy • Class 3 Mathematics • Hindi → Santali"
 )
 
 
 st.info(
-    "This prototype uses Sarvam AI for Hindi → Santali "
-    "translation. The system is designed for mother "
-    "tongue-based primary mathematics education."
+    "The system generates a child-friendly Hindi explanation "
+    "using Sarvam AI and then translates it into Santali."
 )
 
 
@@ -265,10 +315,12 @@ question = st.text_area(
 
     "Enter a Class 3 Mathematics question in Hindi",
 
-    placeholder="उदाहरण: 2 + 3 = ?",
+    placeholder=(
+        "उदाहरण: एक टोकरी में 8 आम हैं और "
+        "दूसरी टोकरी में 5 आम हैं। कुल कितने आम हैं?"
+    ),
 
-    height=100
-
+    height=120
 )
 
 
@@ -290,33 +342,45 @@ if st.button(
         st.stop()
 
 
-    # --------------------------------------------------------
-    # FIND DATASET MATCH
-    # --------------------------------------------------------
-
-    match = find_match(question)
-
-
-    # --------------------------------------------------------
-    # HINDI EXPLANATION
-    # --------------------------------------------------------
+    # ========================================================
+    # AI PEDAGOGY
+    # ========================================================
 
     st.subheader(
-        "🇮🇳 Hindi Explanation"
+        "🧠 AI Hindi Explanation"
     )
 
-    hindi_explanation = generate_hindi_explanation(
-        question
-    )
+
+    with st.spinner(
+        "AI is preparing a child-friendly explanation..."
+    ):
+
+        hindi_explanation, pedagogy_error = (
+            generate_ai_explanation(question)
+        )
+
+
+    if pedagogy_error:
+
+        st.error(
+            "AI explanation failed."
+        )
+
+        st.caption(
+            f"Error: {pedagogy_error}"
+        )
+
+        st.stop()
+
 
     st.write(
         hindi_explanation
     )
 
 
-    # --------------------------------------------------------
+    # ========================================================
     # SANTALI TRANSLATION
-    # --------------------------------------------------------
+    # ========================================================
 
     st.subheader(
         "🌐 Santali Translation"
@@ -355,16 +419,81 @@ if st.button(
         )
 
 
-    # --------------------------------------------------------
-    # DATASET INFORMATION
-    # --------------------------------------------------------
+    # ========================================================
+    # PRACTICE QUESTION
+    # ========================================================
 
-    if match is not None:
+    st.subheader(
+        "📝 Practice Question"
+    )
 
-        st.caption(
-            f"Topic: {clean(match['Topic'])} "
-            f"| Dataset ID: {clean(match['ID'])}"
+
+    with st.spinner(
+        "Generating a similar practice question..."
+    ):
+
+        practice_question = (
+            generate_practice_question(question)
         )
+
+
+    if practice_question:
+
+        st.write(
+            practice_question
+        )
+
+    else:
+
+        st.info(
+            "Practice question could not be generated."
+        )
+
+
+# ============================================================
+# SIDEBAR
+# ============================================================
+
+st.sidebar.header(
+    "Project Status"
+)
+
+
+st.sidebar.success(
+    "Dataset loaded"
+)
+
+
+if sarvam_available:
+
+    st.sidebar.success(
+        "Sarvam AI connected"
+    )
+
+else:
+
+    st.sidebar.error(
+        "Sarvam API not configured"
+    )
+
+    if sarvam_error:
+
+        st.sidebar.caption(
+            f"Debug: {sarvam_error}"
+        )
+
+
+st.sidebar.info(
+    "AI Pedagogy: Sarvam 105B"
+)
+
+st.sidebar.info(
+    "Translation: Hindi → Santali"
+)
+
+st.sidebar.info(
+    "Scope: Class 3 Mathematics"
+)
 
 
 # ============================================================
@@ -383,57 +512,19 @@ with st.expander(
     )
 
     st.write(
-        "Source sheet: **Core_Seed_300**"
+        "AI pedagogy engine: **Sarvam 105B**"
     )
 
     st.write(
-        "The starter dataset contains Class 1–3 "
-        "primary mathematics material. Language-specific "
-        "translations require native-speaker validation."
-    )
-
-    st.write(
-        "Current translation layer: **Sarvam AI**"
+        "Translation engine: **Sarvam Translate**"
     )
 
     st.write(
         "Target language: **Santali (sat-IN)**"
     )
 
-
-# ============================================================
-# SIDEBAR
-# ============================================================
-
-st.sidebar.header(
-    "Project Status"
-)
-
-st.sidebar.success(
-    "Dataset loaded"
-)
-
-if sarvam_available:
-
-    st.sidebar.success(
-        "Sarvam API connected"
+    st.write(
+        "The starter dataset is used as supporting "
+        "educational data. Language-specific translations "
+        "still require native-speaker validation."
     )
-
-else:
-
-    st.sidebar.error(
-        "Sarvam API not configured"
-    )
-
-
-st.sidebar.info(
-    "Translation: Hindi → Santali"
-)
-
-st.sidebar.info(
-    "Scope: Class 3 Mathematics"
-)
-
-st.sidebar.markdown(
-    "**Next:** Add voice interaction"
-)
