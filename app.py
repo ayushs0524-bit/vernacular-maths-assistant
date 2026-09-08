@@ -27,15 +27,23 @@ DATA_FILE = "Hindi_Santali_Maths_Dataset_Starter.xlsx"
 # ============================================================
 
 try:
-    sarvam_client = SarvamAI(
-        api_subscription_key=st.secrets["sk_p87syka3_uMW7J8EipungKX3djRZb4a8x"]
-    )
-    sarvam_available = True
+    sarvam_key = st.secrets["SARVAM_API_KEY"]
 
-except Exception:
+    sarvam_client = SarvamAI(
+        api_subscription_key=sarvam_key
+    )
+
+    sarvam_available = True
+    sarvam_error = None
+
+except Exception as e:
     sarvam_client = None
     sarvam_available = False
+    sarvam_error = str(e)
 
+if not sarvam_available:
+    st.sidebar.error("Sarvam API not configured")
+    st.sidebar.caption(f"Debug: {sarvam_error}")
 
 # ============================================================
 # LOAD DATASET
