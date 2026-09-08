@@ -6,6 +6,8 @@ import hashlib
 import os
 from io import BytesIO
 from pathlib import Path
+import tempfile
+import wave
 
 from reportlab.lib.pagesizes import A4
 from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
@@ -1080,48 +1082,161 @@ def create_pdf(
 # ============================================================
 
 def transcribe_hindi_voice(audio_file):
+    """
+    Convert Streamlit's recorded audio into a clean WAV file and
+    send the file path to Sarvam Saaras STT.
+
+    Streamlit/browser recordings can sometimes arrive with a MIME type
+    such as audio/vnd.wave. Writing a real .wav file to disk makes the
+    upload metadata unambiguous for the Sarvam SDK.
+    """
 
     if not sarvam_available:
-
         return (
             None,
             "Sarvam AI is not connected."
         )
 
+    temp_path = None
+
     try:
+        # --------------------------------------------------------
+        # 1. Read the recording from Streamlit
+        # --------------------------------------------------------
 
         audio_bytes = audio_file.getvalue()
 
-        audio_buffer = BytesIO(
-            audio_bytes
-        )
-
-        audio_buffer.name = (
-            "voice_question.wav"
-        )
-
-        response = (
-            sarvam_client
-            .speech_to_text
-            .transcribe(
-                file=audio_buffer,
-                model="saaras:v3",
-                language_code="hi-IN",
-                mode="transcribe"
+        if not audio_bytes:
+            return (
+                None,
+                "No audio was recorded. Please record your question again."
             )
+
+        # --------------------------------------------------------
+        # 2. Validate and rebuild the WAV container
+        # --------------------------------------------------------
+        # The screenshot error showed:
+        #     Invalid file type: audio/vnd.wave
+        #
+        # The audio itself is WAV, but its MIME metadata is not one
+        # Sarvam accepts. Rebuilding the WAV gives us a clean file
+        # with a .wav extension and standard RIFF/WAVE headers.
+
+        input_buffer = BytesIO(audio_bytes)
+
+        try:
+            with wave.open(input_buffer, "rb") as wav_in:
+                channels = wav_in.getnchannels()
+                sample_width = wav_in.getsampwidth()
+                sample_rate = wav_in.getframerate()
+                frames = wav_in.readframes(wav_in.getnframes())
+
+        except wave.Error as e:
+            return (
+                None,
+                f"Recorded audio is not a valid WAV file: {e}"
+            )
+
+        if not frames:
+            return (
+                None,
+                "The recording contains no audio. Please record again."
+            )
+
+        # --------------------------------------------------------
+        # 3. Write a real temporary .wav file
+        # --------------------------------------------------------
+
+        with tempfile.NamedTemporaryFile(
+            suffix=".wav",
+            delete=False
+        ) as temp_file:
+
+            temp_path = temp_file.name
+
+        with wave.open(temp_path, "wb") as wav_out:
+            wav_out.setnchannels(channels)
+            wav_out.setsampwidth(sample_width)
+            wav_out.setframerate(sample_rate)
+            wav_out.writeframes(frames)
+
+        # --------------------------------------------------------
+        # 4. Send the actual WAV file to Sarvam
+        # --------------------------------------------------------
+        # Passing an opened .wav file follows Sarvam's documented
+        # Python SDK usage and lets the SDK/server infer the correct
+        # audio type from the real file.
+
+        with open(temp_path, "rb") as wav_file:
+            response = (
+                sarvam_client
+                .speech_to_text
+                .transcribe(
+                    file=wav_file,
+                    model="saaras:v3",
+                    language_code="hi-IN",
+                    mode="transcribe"
+                )
+            )
+
+        transcript = getattr(
+            response,
+            "transcript",
+            ""
         )
+
+        if not transcript:
+            return (
+                None,
+                "Sarvam received the audio but returned an empty transcript."
+            )
 
         return (
-            response.transcript.strip(),
+            transcript.strip(),
             None
         )
 
     except Exception as e:
+        # Keep the UI error short and useful instead of dumping the
+        # complete HTTP headers returned by the API.
+        error_text = str(e)
 
-        return (
-            None,
-            str(e)
-        )
+        if "Invalid file type" in error_text:
+            error_message = (
+                "Sarvam rejected the audio format. "
+                "The recording was converted to standard WAV, "
+                "so please try recording once more."
+            )
+        elif "400" in error_text:
+            error_message = (
+                "Sarvam rejected the voice request (HTTP 400). "
+                "Please record a short Hindi question and try again."
+            )
+        elif "401" in error_text or "403" in error_text:
+            error_message = (
+                "Sarvam authentication failed. "
+                "Please check SARVAM_API_KEY in Streamlit Secrets."
+            )
+        elif "429" in error_text:
+            error_message = (
+                "Sarvam rate limit reached. "
+                "Please wait a moment and try again."
+            )
+        else:
+            error_message = (
+                f"Voice transcription failed: {error_text}"
+            )
+
+        return None, error_message
+
+    finally:
+        # Remove the temporary WAV file after the API call.
+        if temp_path:
+            try:
+                os.remove(temp_path)
+            except OSError:
+                pass
+
 
 
 # ============================================================
