@@ -1,5 +1,22 @@
 import streamlit as st
 import pandas as pd
+import json
+import re
+from io import BytesIO
+from reportlab.lib.pagesizes import A4
+from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
+from reportlab.lib.enums import TA_CENTER
+from reportlab.lib.units import cm
+from reportlab.platypus import (
+    SimpleDocTemplate,
+    Paragraph,
+    Spacer,
+    Table,
+    TableStyle,
+    PageBreak
+)
+from reportlab.pdfbase import pdfmetrics
+from reportlab.pdfbase.ttfonts import TTFont
 from sarvamai import SarvamAI
 
 
@@ -262,11 +279,11 @@ def generate_worksheet():
     system_prompt = """
 You are an expert Class 3 primary-school mathematics teacher.
 
-Create a worksheet containing exactly 5 mathematics questions.
+Create exactly 5 mathematics questions.
 
-The worksheet must cover DIFFERENT Class 3 mathematics concepts.
+The questions must cover DIFFERENT Class 3 mathematics concepts.
 
-Possible concepts include:
+Possible concepts:
 - Addition
 - Subtraction
 - Multiplication
@@ -280,15 +297,15 @@ Possible concepts include:
 - Simple word problems
 - Basic geometry
 
-Important rules:
-- Questions must be appropriate for Class 3.
-- Do not use Class 4, 5, or higher mathematics.
-- Mix direct calculation questions and word problems.
+Rules:
+- Suitable only for Class 3.
+- Do not use Class 4 or higher mathematics.
+- Mix calculation questions and word problems.
 - Use simple Hindi.
-- Use different numbers in every question.
-- Include a mixture of easy, medium, and slightly challenging questions.
-- Do not repeat the same mathematical operation for all questions.
+- Use different numbers.
+- Include easy, medium and challenging questions.
 - Every question must have one clear numerical answer.
+- Do NOT provide answers inside the questions.
 
 Return ONLY valid JSON.
 
@@ -331,10 +348,6 @@ Use exactly this structure:
 }
 """
 
-    user_prompt = """
-Generate a Class 3 Mathematics worksheet covering different topics.
-"""
-
     try:
 
         response = sarvam_client.chat.completions(
@@ -346,25 +359,361 @@ Generate a Class 3 Mathematics worksheet covering different topics.
                 },
                 {
                     "role": "user",
-                    "content": user_prompt
+                    "content": (
+                        "Generate a Class 3 Mathematics "
+                        "worksheet covering different topics."
+                    )
                 }
             ],
             temperature=0.5,
-            max_tokens=1000,
+            max_tokens=1200,
             reasoning_effort=None
         )
 
         worksheet_text = response.choices[0].message.content
 
-        return worksheet_text, None
+        # Remove markdown code fences if AI adds them
+        worksheet_text = re.sub(
+            r"```json|```",
+            "",
+            worksheet_text
+        ).strip()
+
+        worksheet_data = json.loads(worksheet_text)
+
+        return worksheet_data, None
 
     except Exception as e:
         return None, str(e)
 
 
 # --------------------------------------------------
-# SIDEBAR
+# GENERATE ANSWER FOR WORKSHEET
 # --------------------------------------------------
+
+def generate_answer(question):
+
+    if not sarvam_available:
+        return "Unavailable"
+
+    prompt = f"""
+Solve this Class 3 mathematics question.
+
+Return ONLY the final numerical answer.
+Do not provide explanation.
+
+Question:
+{question}
+"""
+
+    try:
+
+        response = sarvam_client.chat.completions(
+            model="sarvam-105b",
+            messages=[
+                {
+                    "role": "user",
+                    "content": prompt
+                }
+            ],
+            temperature=0.1,
+            max_tokens=50,
+            reasoning_effort=None
+        )
+
+        return response.choices[0].message.content.strip()
+
+    except Exception:
+        return "Unavailable"
+
+
+# --------------------------------------------------
+# REGISTER FONT FOR HINDI
+# --------------------------------------------------
+
+def setup_pdf_font():
+
+    font_paths = [
+        "/usr/share/fonts/truetype/noto/NotoSansDevanagari-Regular.ttf",
+        "/usr/share/fonts/opentype/noto/NotoSansDevanagari-Regular.ttf",
+        "/usr/share/fonts/truetype/noto/NotoSansDevanagari-Regular.ttf"
+    ]
+
+    for path in font_paths:
+
+        try:
+
+            pdfmetrics.registerFont(
+                TTFont("NotoDevanagari", path)
+            )
+
+            return "NotoDevanagari"
+
+        except Exception:
+            continue
+
+    return "Helvetica"
+
+
+# --------------------------------------------------
+# CREATE PDF WORKSHEET
+# --------------------------------------------------
+
+def create_pdf(worksheet_data, santali_questions, answers):
+
+    buffer = BytesIO()
+
+    font_name = setup_pdf_font()
+
+    document = SimpleDocTemplate(
+        buffer,
+        pagesize=A4,
+        rightMargin=1.5 * cm,
+        leftMargin=1.5 * cm,
+        topMargin=1.5 * cm,
+        bottomMargin=1.5 * cm
+    )
+
+    styles = getSampleStyleSheet()
+
+    title_style = ParagraphStyle(
+        "WorksheetTitle",
+        parent=styles["Title"],
+        fontName=font_name,
+        fontSize=20,
+        leading=24,
+        alignment=TA_CENTER,
+        spaceAfter=10
+    )
+
+    subtitle_style = ParagraphStyle(
+        "Subtitle",
+        parent=styles["Normal"],
+        fontName=font_name,
+        fontSize=11,
+        leading=15,
+        alignment=TA_CENTER,
+        spaceAfter=15
+    )
+
+    question_style = ParagraphStyle(
+        "Question",
+        parent=styles["Normal"],
+        fontName=font_name,
+        fontSize=11,
+        leading=17,
+        spaceAfter=8
+    )
+
+    small_style = ParagraphStyle(
+        "Small",
+        parent=styles["Normal"],
+        fontName=font_name,
+        fontSize=9,
+        leading=13
+    )
+
+    story = []
+
+    # ----------------------------------------------
+    # HEADER
+    # ----------------------------------------------
+
+    story.append(
+        Paragraph(
+            "CLASS 3 — MATHEMATICS WORKSHEET",
+            title_style
+        )
+    )
+
+    story.append(
+        Paragraph(
+            "हिंदी ↔ संताली | Hindi ↔ Santali",
+            subtitle_style
+        )
+    )
+
+    student_table = Table(
+        [
+            [
+                Paragraph(
+                    "<b>नाम:</b> __________________________",
+                    question_style
+                ),
+                Paragraph(
+                    "<b>तारीख:</b> __________________",
+                    question_style
+                )
+            ]
+        ],
+        colWidths=[10 * cm, 7 * cm]
+    )
+
+    student_table.setStyle(
+        TableStyle(
+            [
+                ("VALIGN", (0, 0), (-1, -1), "TOP"),
+                ("BOTTOMPADDING", (0, 0), (-1, -1), 8)
+            ]
+        )
+    )
+
+    story.append(student_table)
+
+    story.append(
+        Paragraph(
+            "प्रश्नों को ध्यान से पढ़ें और हल करें।",
+            question_style
+        )
+    )
+
+    story.append(Spacer(1, 8))
+
+    # ----------------------------------------------
+    # QUESTIONS
+    # ----------------------------------------------
+
+    for i, item in enumerate(
+        worksheet_data["questions"]
+    ):
+
+        question_number = item.get(
+            "number",
+            i + 1
+        )
+
+        topic = item.get(
+            "topic",
+            "Mathematics"
+        )
+
+        difficulty = item.get(
+            "difficulty",
+            "Medium"
+        )
+
+        hindi_question = item.get(
+            "question",
+            ""
+        )
+
+        santali_question = ""
+
+        if i < len(santali_questions):
+            santali_question = santali_questions[i]
+
+        story.append(
+            Paragraph(
+                f"<b>प्रश्न {question_number}</b> "
+                f"({topic} • {difficulty})",
+                question_style
+            )
+        )
+
+        story.append(
+            Paragraph(
+                f"<b>हिंदी:</b> {hindi_question}",
+                question_style
+            )
+        )
+
+        story.append(
+            Paragraph(
+                f"<b>संताली:</b> {santali_question}",
+                question_style
+            )
+        )
+
+        story.append(
+            Paragraph(
+                "उत्तर: __________________________________________",
+                question_style
+            )
+        )
+
+        story.append(Spacer(1, 10))
+
+    # ----------------------------------------------
+    # ANSWER KEY
+    # ----------------------------------------------
+
+    story.append(PageBreak())
+
+    story.append(
+        Paragraph(
+            "ANSWER KEY",
+            title_style
+        )
+    )
+
+    story.append(
+        Paragraph(
+            "शिक्षक के लिए उत्तर सूची",
+            subtitle_style
+        )
+    )
+
+    answer_data = [
+        [
+            Paragraph("<b>Question</b>", small_style),
+            Paragraph("<b>Answer</b>", small_style)
+        ]
+    ]
+
+    for i, answer in enumerate(answers):
+
+        answer_data.append(
+            [
+                Paragraph(
+                    str(i + 1),
+                    small_style
+                ),
+                Paragraph(
+                    str(answer),
+                    small_style
+                )
+            ]
+        )
+
+    answer_table = Table(
+        answer_data,
+        colWidths=[4 * cm, 10 * cm]
+    )
+
+    answer_table.setStyle(
+        TableStyle(
+            [
+                ("GRID", (0, 0), (-1, -1), 0.5, "black"),
+                ("VALIGN", (0, 0), (-1, -1), "MIDDLE"),
+                ("LEFTPADDING", (0, 0), (-1, -1), 8),
+                ("RIGHTPADDING", (0, 0), (-1, -1), 8),
+                ("TOPPADDING", (0, 0), (-1, -1), 8),
+                ("BOTTOMPADDING", (0, 0), (-1, -1), 8)
+            ]
+        )
+    )
+
+    story.append(answer_table)
+
+    story.append(Spacer(1, 20))
+
+    story.append(
+        Paragraph(
+            "Generated by AI Vernacular Maths Assistant",
+            small_style
+        )
+    )
+
+    document.build(story)
+
+    buffer.seek(0)
+
+    return buffer.getvalue()
+
+
+# ==================================================
+# SIDEBAR
+# ==================================================
 
 with st.sidebar:
 
@@ -543,80 +892,136 @@ if generate_worksheet_button:
 
     else:
 
+        # ------------------------------------------
+        # GENERATE QUESTIONS
+        # ------------------------------------------
+
         with st.spinner(
             "🧠 Creating Class 3 Maths worksheet..."
         ):
 
-            worksheet_text, worksheet_error = (
+            worksheet_data, worksheet_error = (
                 generate_worksheet()
             )
 
-        if worksheet_text:
+        if worksheet_data:
 
             st.subheader(
                 "🇮🇳 Hindi Worksheet"
             )
 
-            st.code(
-                worksheet_text,
-                language="json"
-            )
+            # Display Hindi questions
+            for item in worksheet_data["questions"]:
 
-            # --------------------------------------
-            # TRANSLATE COMPLETE WORKSHEET
-            # --------------------------------------
-
-            with st.spinner(
-                "🌐 Translating worksheet into Santali..."
-            ):
-
-                santali_worksheet, translation_error = (
-                    translate_to_santali(worksheet_text)
-                )
-
-            if santali_worksheet:
-
-                st.subheader(
-                    "🌐 Santali Worksheet"
+                st.markdown(
+                    f"**Q{item['number']} — "
+                    f"{item['topic']} "
+                    f"({item['difficulty']})**"
                 )
 
                 st.write(
-                    santali_worksheet
-                )
-
-            else:
-
-                st.error(
-                    f"Worksheet translation failed: "
-                    f"{translation_error}"
+                    item["question"]
                 )
 
             # --------------------------------------
-            # DOWNLOAD BUTTON
+            # SANTALI TRANSLATIONS
             # --------------------------------------
 
-            worksheet_download = (
-                "AI VERNACULAR MATHS ASSISTANT\n"
-                "Class 3 Mathematics\n"
-                "Hindi → Santali\n\n"
-                "====================================\n\n"
-                "HINDI WORKSHEET\n\n"
-                + worksheet_text
-                + "\n\n====================================\n\n"
-                "SANTALI WORKSHEET\n\n"
-                + (
-                    santali_worksheet
-                    if santali_worksheet
-                    else "Translation unavailable."
-                )
+            santali_questions = []
+
+            st.subheader(
+                "🌐 Santali Worksheet"
             )
 
-            st.download_button(
-                label="📥 Download Worksheet",
-                data=worksheet_download,
-                file_name="Class_3_Bilingual_Maths_Worksheet.txt",
-                mime="text/plain"
-            )
+            for item in worksheet_data["questions"]:
+
+                with st.spinner(
+                    f"Translating question {item['number']}..."
+                ):
+
+                    translated, translation_error = (
+                        translate_to_santali(
+                            item["question"]
+                        )
+                    )
+
+                if translated:
+
+                    santali_questions.append(
+                        translated
+                    )
+
+                    st.markdown(
+                        f"**Q{item['number']} — "
+                        f"संताली**"
+                    )
+
+                    st.write(translated)
+
+                else:
+
+                    santali_questions.append(
+                        "Translation unavailable."
+                    )
+
+                    st.error(
+                        f"Translation failed for "
+                        f"question {item['number']}: "
+                        f"{translation_error}"
+                    )
+
+            # --------------------------------------
+            # ANSWERS
+            # --------------------------------------
+
+            with st.spinner(
+                "✅ Creating answer key..."
+            ):
+
+                answers = []
+
+                for item in worksheet_data["questions"]:
+
+                    answer = generate_answer(
+                        item["question"]
+                    )
+
+                    answers.append(answer)
+
+            # --------------------------------------
+            # CREATE PDF
+            # --------------------------------------
+
+            with st.spinner(
+                "📄 Creating printable PDF..."
+            ):
+
+                try:
+
+                    pdf_data = create_pdf(
+                        worksheet_data,
+                        santali_questions,
+                        answers
+                    )
+
+                    st.success(
+                        "🎉 Bilingual worksheet PDF is ready!"
+                    )
+
+                    st.download_button(
+                        label="📥 Download Bilingual PDF",
+                        data=pdf_data,
+                        file_name=(
+                            "Class_3_Bilingual_Maths_Worksheet.pdf"
+                        ),
+                        mime="application/pdf"
+                    )
+
+                except Exception as e:
+
+                    st.error(
+                        f"PDF generation failed: {e}"
+                    )
 
         else:
 
@@ -646,6 +1051,7 @@ with st.expander("ℹ️ About this prototype"):
         • Practice question generation
         • AI-generated multi-topic worksheet
         • Bilingual worksheet output
+        • Printable PDF worksheet
         • Local starter dataset integration
 
         AI services are powered by Sarvam AI.
