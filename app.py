@@ -2,7 +2,11 @@ import streamlit as st
 import pandas as pd
 import json
 import re
+import hashlib
+import os
 from io import BytesIO
+from pathlib import Path
+
 from reportlab.lib.pagesizes import A4
 from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
 from reportlab.lib.enums import TA_CENTER
@@ -13,38 +17,109 @@ from reportlab.platypus import (
     Spacer,
     Table,
     TableStyle,
-    PageBreak
+    PageBreak,
 )
 from reportlab.pdfbase import pdfmetrics
 from reportlab.pdfbase.ttfonts import TTFont
+
 from sarvamai import SarvamAI
 
 
-# --------------------------------------------------
+# ============================================================
 # PAGE CONFIG
-# --------------------------------------------------
+# ============================================================
 
 st.set_page_config(
-    page_title="AI Vernacular Maths Assistant",
+    page_title="Vernacular Maths Assistant",
     page_icon="📚",
-    layout="wide"
+    layout="wide",
 )
 
 
-# --------------------------------------------------
-# TITLE
-# --------------------------------------------------
+# ============================================================
+# CUSTOM CSS
+# ============================================================
 
-st.title("📚 AI Vernacular Maths Assistant")
+st.markdown(
+    """
+    <style>
 
-st.caption(
-    "AI-powered pedagogy • Class 3 Mathematics • Hindi → Santali"
+    .main-title {
+        font-size: 42px;
+        font-weight: 800;
+        text-align: center;
+        margin-bottom: 5px;
+    }
+
+    .subtitle {
+        text-align: center;
+        font-size: 18px;
+        color: #666;
+        margin-bottom: 25px;
+    }
+
+    .feature-card {
+        padding: 18px;
+        border-radius: 15px;
+        border: 1px solid rgba(128,128,128,0.25);
+        margin-bottom: 15px;
+    }
+
+    .success-box {
+        padding: 15px;
+        border-radius: 12px;
+        background: rgba(0, 180, 100, 0.08);
+        border: 1px solid rgba(0, 180, 100, 0.3);
+    }
+
+    .small-text {
+        font-size: 13px;
+        color: #777;
+    }
+
+    </style>
+    """,
+    unsafe_allow_html=True,
 )
 
 
-# --------------------------------------------------
-# SARVAM API CONFIGURATION
-# --------------------------------------------------
+# ============================================================
+# HEADER
+# ============================================================
+
+st.markdown(
+    '<div class="main-title">📚 Vernacular Maths Assistant</div>',
+    unsafe_allow_html=True,
+)
+
+st.markdown(
+    """
+    <div class="subtitle">
+    AI-Powered Hindi → Santali Mathematics Learning Assistant
+    <br>
+    Class 3 • Mathematics • Addition & Subtraction + Multi-topic Practice
+    </div>
+    """,
+    unsafe_allow_html=True,
+)
+
+
+# ============================================================
+# SARVAM API
+# ============================================================
+
+# IMPORTANT:
+# Keep your API key in Streamlit Secrets.
+#
+# Example:
+#
+# SARVAM_API_KEY = "your-key"
+#
+# OR if you are currently using:
+#
+# vernacular_maths = "your-key"
+#
+# change the line below accordingly.
 
 sarvam_key = st.secrets.get("SARVAM_API_KEY")
 
@@ -52,93 +127,407 @@ sarvam_available = False
 sarvam_client = None
 sarvam_error = None
 
-if not sarvam_key:
-    sarvam_error = (
-        "SARVAM_API_KEY is missing from Streamlit Secrets. "
-        "Add a secret named exactly SARVAM_API_KEY."
-    )
-else:
+if sarvam_key:
+
     try:
         sarvam_client = SarvamAI(
             api_subscription_key=sarvam_key
         )
+
         sarvam_available = True
+
     except Exception as e:
         sarvam_error = str(e)
 
+else:
 
-# --------------------------------------------------
-# LOAD DATASET
-# --------------------------------------------------
+    sarvam_error = "SARVAM_API_KEY not found in Streamlit Secrets."
 
-DATA_FILE = "Hindi_Santali_Maths_Dataset_Starter.xlsx"
 
-try:
-    df = pd.read_excel(
-        DATA_FILE,
-        sheet_name="Core_Seed_300"
-    )
+# ============================================================
+# DATASET
+# ============================================================
 
-    class3_df = df[
-        df["Class"].astype(str).str.contains("3", na=False)
+DATASET_FILE = "Hindi_Santali_Maths_Dataset_Starter.xlsx"
+
+
+@st.cache_data
+def load_dataset():
+
+    if not os.path.exists(DATASET_FILE):
+        return None, None
+
+    try:
+
+        core_df = pd.read_excel(
+            DATASET_FILE,
+            sheet_name="Core_Seed_300"
+        )
+
+        validation_df = pd.read_excel(
+            DATASET_FILE,
+            sheet_name="Native_Validation_200"
+        )
+
+        return core_df, validation_df
+
+    except Exception:
+        return None, None
+
+
+core_df, validation_df = load_dataset()
+
+
+if core_df is not None:
+
+    class3_df = core_df[
+        core_df["Class"].astype(str).str.contains(
+            "3",
+            na=False
+        )
     ].copy()
 
-    dataset_loaded = True
-    dataset_error = None
+else:
 
-except Exception as e:
-    dataset_loaded = False
     class3_df = pd.DataFrame()
-    dataset_error = str(e)
 
 
-# --------------------------------------------------
-# FIND DATASET MATCH
-# --------------------------------------------------
+# ============================================================
+# CURRICULUM / LEARNING OUTCOME MAP
+# ============================================================
 
-def find_match(question):
+CURRICULUM = {
 
-    if not dataset_loaded or class3_df.empty:
-        return None
+    "Addition": {
+        "learning_outcome":
+            "Student can add two or more numbers and solve simple addition word problems.",
+        "skills":
+            "Number addition, carrying, mathematical reasoning"
+    },
 
-    question_clean = question.strip().lower()
+    "Subtraction": {
+        "learning_outcome":
+            "Student can subtract numbers and understand difference between quantities.",
+        "skills":
+            "Subtraction, borrowing, comparison"
+    },
+
+    "Multiplication": {
+        "learning_outcome":
+            "Student understands multiplication as repeated addition.",
+        "skills":
+            "Multiplication tables, repeated addition"
+    },
+
+    "Division": {
+        "learning_outcome":
+            "Student understands simple division as equal sharing.",
+        "skills":
+            "Equal grouping, division facts"
+    },
+
+    "Comparing Numbers": {
+        "learning_outcome":
+            "Student can compare numbers using greater than, less than and equal to.",
+        "skills":
+            "Number comparison"
+    },
+
+    "Place Value": {
+        "learning_outcome":
+            "Student understands ones, tens and hundreds place values.",
+        "skills":
+            "Place value and number decomposition"
+    },
+
+    "Fractions": {
+        "learning_outcome":
+            "Student understands simple fractions as equal parts of a whole.",
+        "skills":
+            "Half, quarter and simple fractions"
+    },
+
+    "Money": {
+        "learning_outcome":
+            "Student can solve simple money-related addition and subtraction problems.",
+        "skills":
+            "Rupees, paise and transactions"
+    },
+
+    "Time": {
+        "learning_outcome":
+            "Student can understand basic time concepts and read a clock.",
+        "skills":
+            "Hours, minutes and daily activities"
+    },
+
+    "Measurement": {
+        "learning_outcome":
+            "Student can use basic units of length, weight and capacity.",
+        "skills":
+            "Measurement and comparison"
+    },
+
+    "Geometry": {
+        "learning_outcome":
+            "Student can identify and describe basic geometric shapes.",
+        "skills":
+            "Shapes, sides and simple geometry"
+    },
+}
+
+
+# ============================================================
+# LOCAL CACHE
+# ============================================================
+
+if "answer_cache" not in st.session_state:
+    st.session_state.answer_cache = {}
+
+if "translation_cache" not in st.session_state:
+    st.session_state.translation_cache = {}
+
+if "worksheet_cache" not in st.session_state:
+    st.session_state.worksheet_cache = {}
+
+
+def cache_key(text):
+
+    return hashlib.md5(
+        text.strip().lower().encode("utf-8")
+    ).hexdigest()
+
+
+# ============================================================
+# RAG RETRIEVAL
+# ============================================================
+
+def retrieve_context(question, top_k=5):
+
+    """
+    Lightweight local RAG.
+
+    Searches the user's Excel knowledge base using:
+    - Hindi text
+    - topic
+    - sentence type
+    - English gloss
+
+    This keeps the prototype simple and does not require
+    a vector database.
+    """
+
+    if class3_df.empty:
+        return []
+
+    question_lower = question.lower()
+
+    scored_rows = []
 
     for _, row in class3_df.iterrows():
 
-        hindi_text = str(
+        score = 0
+
+        fields = [
+            str(row.get("Hindi_Text", "")),
+            str(row.get("Topic", "")),
+            str(row.get("Sentence_Type", "")),
+            str(row.get("English_Gloss", "")),
+        ]
+
+        combined = " ".join(fields).lower()
+
+        # Exact Hindi sentence
+        if question_lower.strip() == str(
+            row.get("Hindi_Text", "")
+        ).lower().strip():
+
+            score += 100
+
+        # Word overlap
+        question_words = set(
+            re.findall(
+                r"[\u0900-\u097F]+",
+                question_lower
+            )
+        )
+
+        row_words = set(
+            re.findall(
+                r"[\u0900-\u097F]+",
+                combined
+            )
+        )
+
+        overlap = question_words.intersection(row_words)
+
+        score += len(overlap) * 5
+
+        if score > 0:
+
+            scored_rows.append(
+                (score, row)
+            )
+
+    scored_rows.sort(
+        key=lambda x: x[0],
+        reverse=True
+    )
+
+    results = []
+
+    for score, row in scored_rows[:top_k]:
+
+        results.append(
+            {
+                "score": score,
+                "hindi": str(
+                    row.get("Hindi_Text", "")
+                ),
+                "santali": str(
+                    row.get("Santali_Text", "")
+                ),
+                "topic": str(
+                    row.get("Topic", "")
+                ),
+                "sentence_type": str(
+                    row.get("Sentence_Type", "")
+                ),
+                "english": str(
+                    row.get("English_Gloss", "")
+                ),
+            }
+        )
+
+    return results
+
+
+def format_rag_context(results):
+
+    if not results:
+        return "No matching local curriculum example was found."
+
+    context = []
+
+    for item in results:
+
+        context.append(
+            f"""
+Hindi example:
+{item['hindi']}
+
+Santali:
+{item['santali']}
+
+Topic:
+{item['topic']}
+
+Sentence type:
+{item['sentence_type']}
+"""
+        )
+
+    return "\n---\n".join(context)
+
+
+# ============================================================
+# EXACT DATASET MATCH
+# ============================================================
+
+def find_match(question):
+
+    if class3_df.empty:
+        return None
+
+    q = question.strip().lower()
+
+    for _, row in class3_df.iterrows():
+
+        hindi = str(
             row.get("Hindi_Text", "")
         ).strip().lower()
 
-        if hindi_text == question_clean:
+        if hindi == q:
             return row
 
     return None
 
 
-# --------------------------------------------------
-# AI PEDAGOGY ENGINE
-# --------------------------------------------------
+# ============================================================
+# AI CHAT HELPER
+# ============================================================
+
+def call_sarvam(
+    system_prompt,
+    user_prompt,
+    max_tokens=600,
+    temperature=0.2
+):
+
+    if not sarvam_available:
+        raise RuntimeError(
+            "Sarvam AI is not connected."
+        )
+
+    response = sarvam_client.chat.completions(
+
+        model="sarvam-105b",
+
+        messages=[
+            {
+                "role": "system",
+                "content": system_prompt
+            },
+            {
+                "role": "user",
+                "content": user_prompt
+            }
+        ],
+
+        temperature=temperature,
+
+        max_tokens=max_tokens,
+
+        reasoning_effort=None
+    )
+
+    return response.choices[0].message.content.strip()
+
+
+# ============================================================
+# AI STEP-BY-STEP PEDAGOGY
+# ============================================================
 
 def generate_ai_explanation(question):
 
-    if not sarvam_available:
-        return None, "Sarvam AI is not connected."
+    key = cache_key(question)
+
+    if key in st.session_state.answer_cache:
+        return st.session_state.answer_cache[key]
+
+    rag_results = retrieve_context(question)
+
+    rag_context = format_rag_context(
+        rag_results
+    )
 
     system_prompt = """
 You are an expert Class 3 primary-school mathematics teacher.
 
-Explain mathematics to a Class 3 student in very simple Hindi.
+Your job is to explain mathematics to children in very simple Hindi.
 
 Rules:
-- First explain the idea in simple words.
-- Then show the calculation step by step.
-- Use simple language.
-- Avoid advanced mathematical terminology.
-- Use familiar examples when useful.
-- Make sure the final answer is correct.
-- Keep the explanation concise.
 
-Use exactly this structure:
+1. Use age-appropriate Hindi.
+2. Explain the idea before the final answer.
+3. Show calculation step by step.
+4. Do not use advanced mathematical terminology.
+5. Use familiar examples where useful.
+6. Always verify the arithmetic.
+7. Keep the explanation concise.
+8. Follow the retrieved curriculum context when relevant.
+
+Return exactly this structure:
 
 समझते हैं:
 <simple explanation>
@@ -148,88 +537,141 @@ Use exactly this structure:
 
 उत्तर:
 <final answer>
+
+सीखने का उद्देश्य:
+<one short learning outcome>
 """
 
     user_prompt = f"""
-Class 3 Mathematics question:
+Student question:
 
 {question}
+
+Retrieved curriculum examples:
+
+{rag_context}
 
 Explain this question for a Class 3 student.
 """
 
-    try:
+    result = call_sarvam(
+        system_prompt,
+        user_prompt,
+        max_tokens=600,
+        temperature=0.2
+    )
 
-        response = sarvam_client.chat.completions(
-            model="sarvam-105b",
-            messages=[
-                {
-                    "role": "system",
-                    "content": system_prompt
-                },
-                {
-                    "role": "user",
-                    "content": user_prompt
-                }
-            ],
-            temperature=0.2,
-            max_tokens=500,
-            reasoning_effort=None
-        )
+    st.session_state.answer_cache[key] = result
 
-        answer = response.choices[0].message.content
-
-        return answer, None
-
-    except Exception as e:
-        return None, str(e)
+    return result
 
 
-# --------------------------------------------------
+# ============================================================
 # HINDI → SANTALI TRANSLATION
-# --------------------------------------------------
+# ============================================================
 
 def translate_to_santali(hindi_text):
 
+    key = cache_key(hindi_text)
+
+    if key in st.session_state.translation_cache:
+        return st.session_state.translation_cache[key]
+
+    # First check local dataset
+    match = find_match(hindi_text)
+
+    if match is not None:
+
+        santali = str(
+            match.get("Santali_Text", "")
+        ).strip()
+
+        if santali and santali.lower() != "nan":
+
+            st.session_state.translation_cache[key] = santali
+
+            return santali
+
     if not sarvam_available:
-        return None, "Sarvam AI is not connected."
+        return "Santali translation unavailable because Sarvam AI is not connected."
+
+    system_prompt = """
+You are a careful Hindi-to-Santali educational translator.
+
+Translate educational mathematics content from Hindi into Santali.
+
+Rules:
+
+1. Preserve mathematical meaning exactly.
+2. Do not change numbers.
+3. Do not invent information.
+4. Use child-friendly Santali.
+5. Prefer the Santali terminology from the provided reference examples.
+6. Return only the Santali translation.
+"""
+
+    rag_results = retrieve_context(
+        hindi_text,
+        top_k=5
+    )
+
+    reference = format_rag_context(
+        rag_results
+    )
+
+    user_prompt = f"""
+Translate this Hindi educational text into Santali:
+
+{hindi_text}
+
+Reference examples from our local curriculum dataset:
+
+{reference}
+"""
 
     try:
 
         response = sarvam_client.text.translate(
+
             input=hindi_text,
+
             source_language_code="hi-IN",
+
             target_language_code="sat-IN",
+
             model="sarvam-translate:v1"
         )
 
-        return response.translated_text, None
+        translated = response.translated_text.strip()
+
+        st.session_state.translation_cache[key] = translated
+
+        return translated
 
     except Exception as e:
-        return None, str(e)
+
+        return f"Santali translation failed: {e}"
 
 
-# --------------------------------------------------
-# PRACTICE QUESTION GENERATOR
-# --------------------------------------------------
+# ============================================================
+# PRACTICE QUESTION
+# ============================================================
 
 def generate_practice_question(question):
 
-    if not sarvam_available:
-        return None, "Sarvam AI is not connected."
-
     system_prompt = """
-You are a Class 3 primary-school mathematics teacher.
+You are a Class 3 mathematics teacher.
 
-Create ONE new practice question based on the student's question.
+Create ONE new practice question based on the same mathematical concept.
 
 Rules:
-- Keep the same mathematical concept.
+
+- Same concept as the original question.
 - Change the numbers.
-- Keep the difficulty suitable for Class 3.
+- Keep difficulty appropriate for Class 3.
 - Use simple Hindi.
 - Do not provide the answer.
-- Return only the practice question.
+- Return only the question.
 """
 
     user_prompt = f"""
@@ -240,250 +682,216 @@ Original question:
 Create one similar practice question.
 """
 
-    try:
-
-        response = sarvam_client.chat.completions(
-            model="sarvam-105b",
-            messages=[
-                {
-                    "role": "system",
-                    "content": system_prompt
-                },
-                {
-                    "role": "user",
-                    "content": user_prompt
-                }
-            ],
-            temperature=0.4,
-            max_tokens=200,
-            reasoning_effort=None
-        )
-
-        practice = response.choices[0].message.content
-
-        return practice, None
-
-    except Exception as e:
-        return None, str(e)
+    return call_sarvam(
+        system_prompt,
+        user_prompt,
+        max_tokens=200,
+        temperature=0.4
+    )
 
 
-# --------------------------------------------------
-# AI WORKSHEET GENERATOR
-# --------------------------------------------------
+# ============================================================
+# ANSWER GENERATOR
+# ============================================================
+
+def generate_answer(question):
+
+    system_prompt = """
+You are a Class 3 mathematics teacher.
+
+Solve the following question.
+
+Return ONLY the final numerical or short answer.
+Do not explain.
+"""
+
+    return call_sarvam(
+        system_prompt,
+        question,
+        max_tokens=100,
+        temperature=0.1
+    )
+
+
+# ============================================================
+# MULTI-TOPIC WORKSHEET
+# ============================================================
 
 def generate_worksheet():
 
-    if not sarvam_available:
-        return None, "Sarvam AI is not connected."
+    if "worksheet" in st.session_state.worksheet_cache:
+
+        return st.session_state.worksheet_cache[
+            "worksheet"
+        ]
+
+    topics = list(CURRICULUM.keys())
+
+    topic_text = ", ".join(topics)
 
     system_prompt = """
-You are an expert Class 3 primary-school mathematics teacher.
+You are an expert Class 3 mathematics worksheet designer.
 
-Create exactly 5 mathematics questions.
+Create exactly 5 questions.
 
-The questions must cover DIFFERENT Class 3 mathematics concepts.
+Use DIFFERENT mathematical topics.
 
-Possible concepts:
-- Addition
-- Subtraction
-- Multiplication
-- Division
-- Comparing numbers
-- Place value
-- Basic fractions
-- Money
-- Time
-- Measurement
-- Simple word problems
-- Basic geometry
+Possible topics include:
+addition,
+subtraction,
+multiplication,
+division,
+comparing numbers,
+place value,
+fractions,
+money,
+time,
+measurement,
+geometry.
 
-Rules:
-- Suitable only for Class 3.
-- Do not use Class 4 or higher mathematics.
-- Mix calculation questions and word problems.
-- Use simple Hindi.
-- Use different numbers.
-- Include easy, medium and challenging questions.
-- Every question must have one clear numerical answer.
-- Do NOT provide answers inside the questions.
+Difficulty should vary between easy, medium and challenging.
 
 Return ONLY valid JSON.
 
-Use exactly this structure:
+Format:
 
 {
-  "worksheet_title": "कक्षा 3 गणित अभ्यास पत्र",
   "questions": [
     {
-      "number": 1,
-      "topic": "Addition",
-      "difficulty": "Easy",
-      "question": "..."
-    },
-    {
-      "number": 2,
-      "topic": "Subtraction",
-      "difficulty": "Easy",
-      "question": "..."
-    },
-    {
-      "number": 3,
-      "topic": "Multiplication",
-      "difficulty": "Medium",
-      "question": "..."
-    },
-    {
-      "number": 4,
-      "topic": "Division",
-      "difficulty": "Medium",
-      "question": "..."
-    },
-    {
-      "number": 5,
-      "topic": "Word Problem",
-      "difficulty": "Challenging",
+      "topic": "...",
+      "difficulty": "...",
       "question": "..."
     }
   ]
 }
 """
 
-    try:
+    user_prompt = f"""
+Generate a Class 3 mathematics worksheet.
 
-        response = sarvam_client.chat.completions(
-            model="sarvam-105b",
-            messages=[
-                {
-                    "role": "system",
-                    "content": system_prompt
-                },
-                {
-                    "role": "user",
-                    "content": (
-                        "Generate a Class 3 Mathematics "
-                        "worksheet covering different topics."
-                    )
-                }
-            ],
-            temperature=0.5,
-            max_tokens=1200,
-            reasoning_effort=None
-        )
+Use different topics from:
 
-        worksheet_text = response.choices[0].message.content
+{topic_text}
 
-        # Remove markdown code fences if AI adds them
-        worksheet_text = re.sub(
-            r"```json|```",
-            "",
-            worksheet_text
-        ).strip()
-
-        worksheet_data = json.loads(worksheet_text)
-
-        return worksheet_data, None
-
-    except Exception as e:
-        return None, str(e)
-
-
-# --------------------------------------------------
-# GENERATE ANSWER FOR WORKSHEET
-# --------------------------------------------------
-
-def generate_answer(question):
-
-    if not sarvam_available:
-        return "Unavailable"
-
-    prompt = f"""
-Solve this Class 3 mathematics question.
-
-Return ONLY the final numerical answer.
-Do not provide explanation.
-
-Question:
-{question}
+Generate exactly 5 questions.
 """
 
-    try:
+    raw = call_sarvam(
+        system_prompt,
+        user_prompt,
+        max_tokens=900,
+        temperature=0.4
+    )
 
-        response = sarvam_client.chat.completions(
-            model="sarvam-105b",
-            messages=[
-                {
-                    "role": "user",
-                    "content": prompt
-                }
-            ],
-            temperature=0.1,
-            max_tokens=50,
-            reasoning_effort=None
-        )
+    # Remove accidental markdown fences
+    raw = raw.replace(
+        "```json",
+        ""
+    ).replace(
+        "```",
+        ""
+    ).strip()
 
-        return response.choices[0].message.content.strip()
+    data = json.loads(raw)
 
-    except Exception:
-        return "Unavailable"
+    st.session_state.worksheet_cache[
+        "worksheet"
+    ] = data
+
+    return data
 
 
-# --------------------------------------------------
-# REGISTER FONT FOR HINDI
-# --------------------------------------------------
+# ============================================================
+# LEARNING OUTCOME
+# ============================================================
+
+def get_learning_outcome(topic):
+
+    topic = str(topic).strip()
+
+    if topic in CURRICULUM:
+
+        return CURRICULUM[
+            topic
+        ]["learning_outcome"]
+
+    return (
+        "Student develops age-appropriate "
+        "mathematical reasoning skills."
+    )
+
+
+# ============================================================
+# PDF FONT
+# ============================================================
 
 def setup_pdf_font():
 
-    font_paths = [
-        "/usr/share/fonts/truetype/noto/NotoSansDevanagari-Regular.ttf",
-        "/usr/share/fonts/opentype/noto/NotoSansDevanagari-Regular.ttf",
-        "/usr/share/fonts/truetype/noto/NotoSansDevanagari-Regular.ttf"
+    possible_fonts = [
+
+        "/usr/share/fonts/truetype/noto/"
+        "NotoSansDevanagari-Regular.ttf",
+
+        "/usr/share/fonts/opentype/noto/"
+        "NotoSansDevanagari-Regular.ttf",
+
+        "/usr/share/fonts/truetype/dejavu/"
+        "DejaVuSans.ttf",
     ]
 
-    for path in font_paths:
+    for font_path in possible_fonts:
 
-        try:
+        if os.path.exists(font_path):
 
-            pdfmetrics.registerFont(
-                TTFont("NotoDevanagari", path)
-            )
+            try:
 
-            return "NotoDevanagari"
+                pdfmetrics.registerFont(
+                    TTFont(
+                        "AppFont",
+                        font_path
+                    )
+                )
 
-        except Exception:
-            continue
+                return "AppFont"
+
+            except Exception:
+                pass
 
     return "Helvetica"
 
 
-# --------------------------------------------------
-# CREATE PDF WORKSHEET
-# --------------------------------------------------
+# ============================================================
+# CREATE BILINGUAL PDF
+# ============================================================
 
-def create_pdf(worksheet_data, santali_questions, answers):
-
-    buffer = BytesIO()
+def create_pdf(
+    worksheet_data,
+    translated_questions,
+    answers
+):
 
     font_name = setup_pdf_font()
 
-    document = SimpleDocTemplate(
+    buffer = BytesIO()
+
+    doc = SimpleDocTemplate(
         buffer,
         pagesize=A4,
         rightMargin=1.5 * cm,
         leftMargin=1.5 * cm,
         topMargin=1.5 * cm,
-        bottomMargin=1.5 * cm
+        bottomMargin=1.5 * cm,
     )
 
     styles = getSampleStyleSheet()
 
     title_style = ParagraphStyle(
-        "WorksheetTitle",
+        "Title",
         parent=styles["Title"],
         fontName=font_name,
         fontSize=20,
-        leading=24,
         alignment=TA_CENTER,
-        spaceAfter=10
+        spaceAfter=10,
     )
 
     subtitle_style = ParagraphStyle(
@@ -491,9 +899,8 @@ def create_pdf(worksheet_data, santali_questions, answers):
         parent=styles["Normal"],
         fontName=font_name,
         fontSize=11,
-        leading=15,
         alignment=TA_CENTER,
-        spaceAfter=15
+        spaceAfter=15,
     )
 
     question_style = ParagraphStyle(
@@ -501,8 +908,8 @@ def create_pdf(worksheet_data, santali_questions, answers):
         parent=styles["Normal"],
         fontName=font_name,
         fontSize=11,
-        leading=17,
-        spaceAfter=8
+        leading=16,
+        spaceAfter=5,
     )
 
     small_style = ParagraphStyle(
@@ -510,14 +917,14 @@ def create_pdf(worksheet_data, santali_questions, answers):
         parent=styles["Normal"],
         fontName=font_name,
         fontSize=9,
-        leading=13
+        leading=13,
     )
 
     story = []
 
-    # ----------------------------------------------
-    # HEADER
-    # ----------------------------------------------
+    # --------------------------------------------------------
+    # TITLE
+    # --------------------------------------------------------
 
     story.append(
         Paragraph(
@@ -528,59 +935,34 @@ def create_pdf(worksheet_data, santali_questions, answers):
 
     story.append(
         Paragraph(
-            "हिंदी ↔ संताली | Hindi ↔ Santali",
+            "Hindi ↔ Santali Bilingual Learning Worksheet",
             subtitle_style
         )
     )
 
-    student_table = Table(
-        [
-            [
-                Paragraph(
-                    "<b>नाम:</b> __________________________",
-                    question_style
-                ),
-                Paragraph(
-                    "<b>तारीख:</b> __________________",
-                    question_style
-                )
-            ]
-        ],
-        colWidths=[10 * cm, 7 * cm]
-    )
-
-    student_table.setStyle(
-        TableStyle(
-            [
-                ("VALIGN", (0, 0), (-1, -1), "TOP"),
-                ("BOTTOMPADDING", (0, 0), (-1, -1), 8)
-            ]
-        )
-    )
-
-    story.append(student_table)
-
     story.append(
         Paragraph(
-            "प्रश्नों को ध्यान से पढ़ें और हल करें।",
+            "Name: ________________________________",
             question_style
         )
     )
 
-    story.append(Spacer(1, 8))
+    story.append(
+        Paragraph(
+            "Date: _________________________________",
+            question_style
+        )
+    )
 
-    # ----------------------------------------------
+    story.append(Spacer(1, 15))
+
+    # --------------------------------------------------------
     # QUESTIONS
-    # ----------------------------------------------
+    # --------------------------------------------------------
 
     for i, item in enumerate(
         worksheet_data["questions"]
     ):
-
-        question_number = item.get(
-            "number",
-            i + 1
-        )
 
         topic = item.get(
             "topic",
@@ -597,45 +979,61 @@ def create_pdf(worksheet_data, santali_questions, answers):
             ""
         )
 
-        santali_question = ""
+        santali_question = translated_questions[
+            i
+        ]
 
-        if i < len(santali_questions):
-            santali_question = santali_questions[i]
+        outcome = get_learning_outcome(
+            topic
+        )
 
         story.append(
             Paragraph(
-                f"<b>प्रश्न {question_number}</b> "
-                f"({topic} • {difficulty})",
+                f"<b>Q{i + 1}. {topic}</b> "
+                f"({difficulty})",
                 question_style
             )
         )
 
         story.append(
             Paragraph(
-                f"<b>हिंदी:</b> {hindi_question}",
+                f"<b>Hindi:</b> {hindi_question}",
                 question_style
             )
         )
 
         story.append(
             Paragraph(
-                f"<b>संताली:</b> {santali_question}",
+                f"<b>Santali:</b> {santali_question}",
                 question_style
             )
         )
 
         story.append(
             Paragraph(
-                "उत्तर: __________________________________________",
+                f"<b>Learning Outcome:</b> {outcome}",
+                small_style
+            )
+        )
+
+        story.append(
+            Spacer(1, 8)
+        )
+
+        story.append(
+            Paragraph(
+                "Answer: __________________________________________",
                 question_style
             )
         )
 
-        story.append(Spacer(1, 10))
+        story.append(
+            Spacer(1, 15)
+        )
 
-    # ----------------------------------------------
+    # --------------------------------------------------------
     # ANSWER KEY
-    # ----------------------------------------------
+    # --------------------------------------------------------
 
     story.append(PageBreak())
 
@@ -648,288 +1046,524 @@ def create_pdf(worksheet_data, santali_questions, answers):
 
     story.append(
         Paragraph(
-            "शिक्षक के लिए उत्तर सूची",
+            "Teacher / Parent Reference",
             subtitle_style
         )
     )
 
-    answer_data = [
-        [
-            Paragraph("<b>Question</b>", small_style),
-            Paragraph("<b>Answer</b>", small_style)
-        ]
-    ]
-
     for i, answer in enumerate(answers):
 
-        answer_data.append(
-            [
-                Paragraph(
-                    str(i + 1),
-                    small_style
-                ),
-                Paragraph(
-                    str(answer),
-                    small_style
-                )
-            ]
+        story.append(
+            Paragraph(
+                f"<b>{i + 1}. Answer:</b> {answer}",
+                question_style
+            )
         )
 
-    answer_table = Table(
-        answer_data,
-        colWidths=[4 * cm, 10 * cm]
-    )
-
-    answer_table.setStyle(
-        TableStyle(
-            [
-                ("GRID", (0, 0), (-1, -1), 0.5, "black"),
-                ("VALIGN", (0, 0), (-1, -1), "MIDDLE"),
-                ("LEFTPADDING", (0, 0), (-1, -1), 8),
-                ("RIGHTPADDING", (0, 0), (-1, -1), 8),
-                ("TOPPADDING", (0, 0), (-1, -1), 8),
-                ("BOTTOMPADDING", (0, 0), (-1, -1), 8)
-            ]
+        story.append(
+            Spacer(1, 5)
         )
-    )
 
-    story.append(answer_table)
+    # --------------------------------------------------------
+    # BUILD
+    # --------------------------------------------------------
 
-    story.append(Spacer(1, 20))
-
-    story.append(
-        Paragraph(
-            "Generated by AI Vernacular Maths Assistant",
-            small_style
-        )
-    )
-
-    document.build(story)
+    doc.build(story)
 
     buffer.seek(0)
 
-    return buffer.getvalue()
+    return buffer
 
 
-# ==================================================
+# ============================================================
+# VOICE → HINDI TEXT
+# ============================================================
+
+def transcribe_hindi_voice(audio_file):
+
+    if not sarvam_available:
+
+        return (
+            None,
+            "Sarvam AI is not connected."
+        )
+
+    try:
+
+        audio_bytes = audio_file.getvalue()
+
+        audio_buffer = BytesIO(
+            audio_bytes
+        )
+
+        audio_buffer.name = (
+            "voice_question.wav"
+        )
+
+        response = (
+            sarvam_client
+            .speech_to_text
+            .transcribe(
+                file=audio_buffer,
+                model="saaras:v3",
+                language_code="hi-IN",
+                mode="transcribe"
+            )
+        )
+
+        return (
+            response.transcript.strip(),
+            None
+        )
+
+    except Exception as e:
+
+        return (
+            None,
+            str(e)
+        )
+
+
+# ============================================================
+# VOICE OUTPUT — HINDI
+# ============================================================
+
+def generate_hindi_audio(text):
+
+    if not sarvam_available:
+
+        return None, "Sarvam AI is not connected."
+
+    try:
+
+        audio = (
+            sarvam_client
+            .text_to_speech
+            .convert(
+                text=text,
+                model="bulbul:v3",
+                language_code="hi-IN",
+                speaker="priya"
+            )
+        )
+
+        return audio, None
+
+    except Exception as e:
+
+        return None, str(e)
+
+
+# ============================================================
 # SIDEBAR
-# ==================================================
+# ============================================================
 
 with st.sidebar:
 
     st.header("⚙️ System Status")
 
-    if dataset_loaded:
-        st.success("Dataset loaded")
-    else:
-        st.error("Dataset not loaded")
-
-        if dataset_error:
-            st.caption(dataset_error)
-
     if sarvam_available:
-        st.success("Sarvam AI connected")
-    else:
-        st.error("Sarvam API not configured")
 
-        if sarvam_error:
-            st.caption(
-                f"Debug: {sarvam_error}"
-            )
-
-    st.divider()
-
-    st.info("AI Pedagogy: Sarvam 105B")
-    st.info("Translation: Hindi → Santali")
-    st.info("Scope: Class 3 Mathematics")
-
-
-# ==================================================
-# SECTION 1 — AI MATHS ASSISTANT
-# ==================================================
-
-st.header("🧮 AI Maths Assistant")
-
-# --------------------------------------------------
-# QUESTION INPUT
-# --------------------------------------------------
-
-st.subheader("⌨️ Type Your Question")
-
-typed_question = st.text_area(
-    "Enter a Class 3 maths question in Hindi",
-    placeholder="उदाहरण: 25 और 17 को जोड़ने पर कितना होगा?",
-    height=120
-)
-
-st.subheader("🎤 Or Ask by Voice")
-
-audio = st.audio_input(
-    "Record your Hindi maths question"
-)
-
-voice_question = None
-
-if audio is not None:
-
-    with st.spinner("🎧 Converting your voice to Hindi text..."):
-
-        voice_question, voice_error = (
-            transcribe_hindi_voice(audio)
+        st.success(
+            "🟢 Sarvam AI Connected"
         )
-
-    if voice_question:
-
-        st.success("✅ Voice converted successfully!")
-
-        st.markdown("### 🗣️ You said:")
-
-        st.info(voice_question)
 
     else:
 
         st.error(
-            f"Voice transcription failed: {voice_error}"
+            "🔴 Sarvam AI Not Connected"
         )
 
+    if core_df is not None:
 
-# --------------------------------------------------
-# SELECT QUESTION
-# --------------------------------------------------
+        st.success(
+            f"📚 Dataset Loaded\n\n"
+            f"{len(core_df)} core records"
+        )
 
-if voice_question:
-    question = voice_question
-else:
-    question = typed_question
+    else:
+
+        st.warning(
+            "Dataset not found."
+        )
+
+    st.markdown("---")
+
+    st.markdown(
+        """
+        ### 🧠 AI Modules
+
+        ✅ Sarvam-105B  
+        ✅ Hindi → Santali  
+        ✅ Saaras Speech-to-Text  
+        ✅ Bulbul Hindi Voice Output  
+        ✅ Local RAG  
+        ✅ Curriculum Alignment  
+        ✅ Worksheet Generation  
+        """
+    )
+
+    st.markdown("---")
+
+    st.caption(
+        "SIH 2026 Prototype • Class 3 Mathematics"
+    )
 
 
-generate_button = st.button(
-    "🚀 Generate Explanation",
-    type="primary"
+# ============================================================
+# MAIN INPUT SECTION
+# ============================================================
+
+st.header("1️⃣ Ask a Mathematics Question")
+
+input_method = st.radio(
+    "Choose input method",
+    [
+        "⌨️ Type",
+        "🎤 Voice"
+    ],
+    horizontal=True
 )
 
+
+question = ""
+
+
+# ============================================================
+# TEXT INPUT
+# ============================================================
+
+if input_method == "⌨️ Type":
+
+    question = st.text_area(
+        "Enter your Class 3 maths question in Hindi",
+        placeholder=(
+            "उदाहरण: 25 और 17 को जोड़ने पर कितना होगा?"
+        ),
+        height=120
+    )
+
+
+# ============================================================
+# VOICE INPUT
+# ============================================================
+
+else:
+
+    audio = st.audio_input(
+        "🎤 Record your Hindi maths question"
+    )
+
+    if audio is not None:
+
+        with st.spinner(
+            "🎧 Converting your voice to Hindi text..."
+        ):
+
+            voice_question, voice_error = (
+                transcribe_hindi_voice(audio)
+            )
+
+        if voice_question:
+
+            question = voice_question
+
+            st.success(
+                "✅ Voice converted successfully!"
+            )
+
+            st.markdown(
+                "### 🗣️ You said:"
+            )
+
+            st.info(
+                voice_question
+            )
+
+        else:
+
+            st.error(
+                f"Voice transcription failed: "
+                f"{voice_error}"
+            )
+
+
+# ============================================================
+# GENERATE BUTTON
+# ============================================================
+
+generate_button = st.button(
+    "🚀 Generate AI Learning Response",
+    type="primary",
+    use_container_width=True
+)
+
+
+# ============================================================
+# MAIN AI RESPONSE
+# ============================================================
 
 if generate_button:
 
     if not question.strip():
 
         st.warning(
-            "कृपया पहले एक गणित का प्रश्न लिखें।"
+            "Please enter or speak a question first."
+        )
+
+    elif not sarvam_available:
+
+        st.error(
+            "Sarvam AI is not connected. "
+            "Please check Streamlit Secrets."
         )
 
     else:
 
-        matched_row = find_match(question)
+        # ----------------------------------------------------
+        # RAG
+        # ----------------------------------------------------
 
-        if matched_row is not None:
+        rag_results = retrieve_context(
+            question,
+            top_k=5
+        )
 
-            st.info(
-                "📚 This question was found in the local Class 3 dataset."
-            )
-
-        # ------------------------------------------
-        # AI EXPLANATION
-        # ------------------------------------------
+        # ----------------------------------------------------
+        # STEP 1: AI PEDAGOGY
+        # ----------------------------------------------------
 
         with st.spinner(
-            "🧠 AI is creating the explanation..."
+            "🧠 Generating child-friendly explanation..."
         ):
 
-            explanation, explanation_error = (
-                generate_ai_explanation(question)
-            )
-
-        if explanation:
-
-            st.subheader("🧠 AI Hindi Explanation")
-
-            st.markdown(explanation)
-
-        else:
-
-            st.error(
-                f"Could not generate explanation: "
-                f"{explanation_error}"
-            )
-
-        # ------------------------------------------
-        # SANTALI TRANSLATION
-        # ------------------------------------------
-
-        if explanation:
-
-            with st.spinner(
-                "🌐 Translating explanation into Santali..."
-            ):
-
-                santali_text, translation_error = (
-                    translate_to_santali(explanation)
+            explanation = (
+                generate_ai_explanation(
+                    question
                 )
+            )
 
-            if santali_text:
+        st.subheader(
+            "🧠 Step-by-Step Explanation"
+        )
 
-                st.subheader("🌐 Santali Translation")
+        st.markdown(
+            explanation
+        )
 
-                st.write(santali_text)
+        # ----------------------------------------------------
+        # STEP 2: SANTALI TRANSLATION
+        # ----------------------------------------------------
+
+        with st.spinner(
+            "🌐 Translating into Santali..."
+        ):
+
+            santali_translation = (
+                translate_to_santali(
+                    explanation
+                )
+            )
+
+        st.subheader(
+            "🌿 Santali Translation"
+        )
+
+        st.info(
+            santali_translation
+        )
+
+        # ----------------------------------------------------
+        # STEP 3: LEARNING OUTCOME
+        # ----------------------------------------------------
+
+        st.subheader(
+            "🎯 Curriculum Alignment"
+        )
+
+        detected_topic = "Addition"
+
+        if rag_results:
+
+            detected_topic = (
+                rag_results[0]["topic"]
+            )
+
+        st.success(
+            get_learning_outcome(
+                detected_topic
+            )
+        )
+
+        # ----------------------------------------------------
+        # STEP 4: RAG CONTEXT
+        # ----------------------------------------------------
+
+        with st.expander(
+            "🔎 View Retrieved Curriculum Context"
+        ):
+
+            if rag_results:
+
+                for result in rag_results:
+
+                    st.markdown(
+                        f"""
+                        **Topic:** {result['topic']}
+
+                        **Hindi:** {result['hindi']}
+
+                        **Santali:** {result['santali']}
+                        """
+                    )
+
+                    st.markdown("---")
 
             else:
 
-                st.error(
-                    f"Translation failed: "
-                    f"{translation_error}"
+                st.info(
+                    "No local dataset match found."
                 )
 
-        # ------------------------------------------
-        # PRACTICE QUESTION
-        # ------------------------------------------
+        # ----------------------------------------------------
+        # STEP 5: VOICE OUTPUT
+        # ----------------------------------------------------
+
+        st.subheader(
+            "🔊 Listen to Explanation"
+        )
+
+        # We speak the Hindi explanation because
+        # Bulbul v3 currently supports Hindi but not Santali.
 
         with st.spinner(
-            "📝 Creating a practice question..."
+            "🔊 Generating Hindi voice..."
         ):
 
-            practice_question, practice_error = (
-                generate_practice_question(question)
+            audio_output, audio_error = (
+                generate_hindi_audio(
+                    explanation
+                )
             )
 
-        if practice_question:
+        if audio_output:
 
-            st.subheader("📝 Practice Question")
+            # Depending on SDK response shape,
+            # audio_output may expose .audios.
 
-            st.write(practice_question)
+            try:
+
+                if hasattr(
+                    audio_output,
+                    "audios"
+                ):
+
+                    audio_bytes = (
+                        audio_output.audios[0]
+                    )
+
+                    st.audio(
+                        audio_bytes,
+                        format="audio/wav"
+                    )
+
+                elif isinstance(
+                    audio_output,
+                    bytes
+                ):
+
+                    st.audio(
+                        audio_output,
+                        format="audio/wav"
+                    )
+
+                else:
+
+                    st.info(
+                        "Audio generated successfully."
+                    )
+
+            except Exception:
+
+                st.warning(
+                    "Audio generated, "
+                    "but could not be displayed."
+                )
 
         else:
 
-            st.error(
-                f"Practice question generation failed: "
-                f"{practice_error}"
+            st.warning(
+                f"Voice output unavailable: "
+                f"{audio_error}"
             )
 
+        # ----------------------------------------------------
+        # STEP 6: PRACTICE QUESTION
+        # ----------------------------------------------------
 
-# ==================================================
-# SECTION 2 — BILINGUAL WORKSHEET
-# ==================================================
+        st.subheader(
+            "✏️ Practice Question"
+        )
 
-st.divider()
+        with st.spinner(
+            "Generating similar practice question..."
+        ):
 
-st.header("📝 AI Bilingual Worksheet Generator")
+            practice_question = (
+                generate_practice_question(
+                    question
+                )
+            )
+
+        st.write(
+            practice_question
+        )
+
+        # ----------------------------------------------------
+        # STEP 7: PRACTICE QUESTION TRANSLATION
+        # ----------------------------------------------------
+
+        with st.spinner(
+            "Translating practice question..."
+        ):
+
+            practice_santali = (
+                translate_to_santali(
+                    practice_question
+                )
+            )
+
+        st.markdown(
+            "**🌿 Santali:**"
+        )
+
+        st.info(
+            practice_santali
+        )
+
+
+# ============================================================
+# WORKSHEET SECTION
+# ============================================================
+
+st.markdown("---")
+
+st.header(
+    "2️⃣ AI Bilingual Worksheet Generator"
+)
 
 st.write(
-    "Generate a Class 3 Mathematics worksheet "
-    "covering different topics automatically."
+    """
+    Generate a Class 3 worksheet containing
+    multiple mathematics topics, Santali translations,
+    learning outcomes and an answer key.
+    """
 )
 
-st.caption(
-    "The AI selects questions from multiple Class 3 "
-    "mathematics concepts."
-)
-
-
-generate_worksheet_button = st.button(
-    "📄 Generate Bilingual Worksheet"
-)
-
-
-if generate_worksheet_button:
+if st.button(
+    "📄 Generate 5-Question Worksheet",
+    use_container_width=True
+):
 
     if not sarvam_available:
 
@@ -939,225 +1573,340 @@ if generate_worksheet_button:
 
     else:
 
-        # ------------------------------------------
-        # GENERATE QUESTIONS
-        # ------------------------------------------
+        try:
 
-        with st.spinner(
-            "🧠 Creating Class 3 Maths worksheet..."
-        ):
+            with st.spinner(
+                "🧠 Creating multi-topic worksheet..."
+            ):
 
-            worksheet_data, worksheet_error = (
-                generate_worksheet()
+                worksheet = generate_worksheet()
+
+            translated_questions = []
+            answers = []
+
+            progress = st.progress(0)
+
+            total = len(
+                worksheet["questions"]
             )
 
-        if worksheet_data:
+            for i, item in enumerate(
+                worksheet["questions"]
+            ):
+
+                hindi_q = item[
+                    "question"
+                ]
+
+                # Santali
+                santali_q = (
+                    translate_to_santali(
+                        hindi_q
+                    )
+                )
+
+                translated_questions.append(
+                    santali_q
+                )
+
+                # Answer
+                answer = generate_answer(
+                    hindi_q
+                )
+
+                answers.append(
+                    answer
+                )
+
+                progress.progress(
+                    (i + 1) / total
+                )
+
+            progress.empty()
+
+            # ------------------------------------------------
+            # DISPLAY WORKSHEET
+            # ------------------------------------------------
 
             st.subheader(
-                "🇮🇳 Hindi Worksheet"
+                "📚 Worksheet Preview"
             )
 
-            # Display Hindi questions
-            for item in worksheet_data["questions"]:
+            for i, item in enumerate(
+                worksheet["questions"]
+            ):
+
+                topic = item.get(
+                    "topic",
+                    "Mathematics"
+                )
+
+                difficulty = item.get(
+                    "difficulty",
+                    "Medium"
+                )
+
+                hindi_q = item.get(
+                    "question",
+                    ""
+                )
+
+                santali_q = (
+                    translated_questions[i]
+                )
 
                 st.markdown(
-                    f"**Q{item['number']} — "
-                    f"{item['topic']} "
-                    f"({item['difficulty']})**"
+                    f"""
+                    ### Q{i + 1}. {topic}
+
+                    **Difficulty:** {difficulty}
+
+                    **Hindi:**  
+                    {hindi_q}
+
+                    **Santali:**  
+                    {santali_q}
+
+                    **🎯 Learning Outcome:**  
+                    {get_learning_outcome(topic)}
+                    """
                 )
 
-                st.write(
-                    item["question"]
+                st.markdown("---")
+
+            # ------------------------------------------------
+            # PDF
+            # ------------------------------------------------
+
+            with st.spinner(
+                "📄 Creating printable bilingual PDF..."
+            ):
+
+                pdf_file = create_pdf(
+                    worksheet,
+                    translated_questions,
+                    answers
                 )
 
-            # --------------------------------------
-            # SANTALI TRANSLATIONS
-            # --------------------------------------
-
-            santali_questions = []
-
-            st.subheader(
-                "🌐 Santali Worksheet"
+            st.success(
+                "✅ Bilingual worksheet PDF created!"
             )
 
-            for item in worksheet_data["questions"]:
+            st.download_button(
+                label="⬇️ Download Bilingual PDF",
+                data=pdf_file,
+                file_name=(
+                    "Class_3_Hindi_Santali_"
+                    "Bilingual_Worksheet.pdf"
+                ),
+                mime="application/pdf",
+                use_container_width=True
+            )
 
-                with st.spinner(
-                    f"Translating question {item['number']}..."
+            # ------------------------------------------------
+            # ANSWER KEY
+            # ------------------------------------------------
+
+            with st.expander(
+                "🔑 View Answer Key"
+            ):
+
+                for i, answer in enumerate(
+                    answers
                 ):
 
-                    translated, translation_error = (
-                        translate_to_santali(
-                            item["question"]
-                        )
+                    st.write(
+                        f"**Q{i + 1}:** {answer}"
                     )
 
-                if translated:
-
-                    santali_questions.append(
-                        translated
-                    )
-
-                    st.markdown(
-                        f"**Q{item['number']} — "
-                        f"संताली**"
-                    )
-
-                    st.write(translated)
-
-                else:
-
-                    santali_questions.append(
-                        "Translation unavailable."
-                    )
-
-                    st.error(
-                        f"Translation failed for "
-                        f"question {item['number']}: "
-                        f"{translation_error}"
-                    )
-
-            # --------------------------------------
-            # ANSWERS
-            # --------------------------------------
-
-            with st.spinner(
-                "✅ Creating answer key..."
-            ):
-
-                answers = []
-
-                for item in worksheet_data["questions"]:
-
-                    answer = generate_answer(
-                        item["question"]
-                    )
-
-                    answers.append(answer)
-
-            # --------------------------------------
-            # CREATE PDF
-            # --------------------------------------
-
-            with st.spinner(
-                "📄 Creating printable PDF..."
-            ):
-
-                try:
-
-                    pdf_data = create_pdf(
-                        worksheet_data,
-                        santali_questions,
-                        answers
-                    )
-
-                    st.success(
-                        "🎉 Bilingual worksheet PDF is ready!"
-                    )
-
-                    st.download_button(
-                        label="📥 Download Bilingual PDF",
-                        data=pdf_data,
-                        file_name=(
-                            "Class_3_Bilingual_Maths_Worksheet.pdf"
-                        ),
-                        mime="application/pdf"
-                    )
-
-                except Exception as e:
-
-                    st.error(
-                        f"PDF generation failed: {e}"
-                    )
-
-        else:
+        except Exception as e:
 
             st.error(
-                f"Worksheet generation failed: "
-                f"{worksheet_error}"
+                f"Worksheet generation failed: {e}"
             )
 
 
-# ==================================================
-# PROTOTYPE INFORMATION
-# ==================================================
+# ============================================================
+# OFFLINE / CACHE SECTION
+# ============================================================
 
-with st.expander("ℹ️ About this prototype"):
+st.markdown("---")
 
-    st.write(
-        """
-        This prototype demonstrates an AI-powered vernacular
-        mathematics learning assistant for Class 3 students.
+st.header(
+    "3️⃣ Offline & Caching Support"
+)
 
-        Current capabilities:
+st.info(
+    """
+    The prototype caches successful AI results during the
+    current Streamlit session and uses the local Excel
+    curriculum dataset for retrieval.
 
-        • Class 3 Mathematics
-        • Hindi input
-        • AI-generated simple Hindi explanation
-        • Hindi → Santali translation
-        • Practice question generation
-        • AI-generated multi-topic worksheet
-        • Bilingual worksheet output
-        • Printable PDF worksheet
-        • Local starter dataset integration
+    Internet is still required for new Sarvam AI requests.
+    A completely offline AI system would require deploying
+    local ASR/translation/LLM models on the device.
+    """
+)
 
-        AI services are powered by Sarvam AI.
-        """
-    )
-    
-# =========================
-# 🎤 VOICE INPUT
-# =========================
+col1, col2, col3 = st.columns(3)
 
-st.subheader("🎤 Ask by Voice")
+with col1:
 
-audio = st.audio_input("Record your Hindi maths question")
-
-if audio is not None:
-    try:
-        with st.spinner("🎧 Converting your voice to Hindi text..."):
-
-            audio_bytes = audio.getvalue()
-
-            response = sarvam_client.speech_to_text.transcribe(
-                file=audio_bytes,
-                model="saaras:v3",
-                language_code="hi-IN"
-            )
-
-            spoken_question = response.transcript
-
-        st.success("Voice converted successfully!")
-
-        st.write("### 🗣️ You said:")
-        st.info(spoken_question)
-
-        # Use the recognized question as the main question
-        question = spoken_question
-
-    except Exception as e:
-        st.error(f"Voice processing failed: {e}")
-
-# --------------------------------------------------
-# HINDI VOICE → TEXT
-# --------------------------------------------------
-
-def transcribe_hindi_voice(audio_file):
-
-    if not sarvam_available:
-        return None, "Sarvam AI is not connected."
-
-    try:
-
-        response = sarvam_client.speech_to_text.transcribe(
-            file=audio_file,
-            model="saaras:v3",
-            language_code="hi-IN",
-            mode="transcribe"
+    st.metric(
+        "Cached Explanations",
+        len(
+            st.session_state.answer_cache
         )
+    )
 
-        return response.transcript, None
+with col2:
 
-    except Exception as e:
-        return None, str(e)
+    st.metric(
+        "Cached Translations",
+        len(
+            st.session_state.translation_cache
+        )
+    )
+
+with col3:
+
+    st.metric(
+        "Dataset Records",
+        len(class3_df)
+        if not class3_df.empty
+        else 0
+    )
+
+
+# ============================================================
+# RAG / SYSTEM ARCHITECTURE
+# ============================================================
+
+st.markdown("---")
+
+st.header(
+    "4️⃣ Prototype Architecture"
+)
+
+st.markdown(
+    """
+    **User Input**
     
+    ⬇️
+    
+    🎤 Hindi Voice / ⌨️ Hindi Text
+    
+    ⬇️
+    
+    **Sarvam Saaras — Speech-to-Text**
+    
+    ⬇️
+    
+    **Local Curriculum RAG**
+    
+    ⬇️
+    
+    **Sarvam-105B**
+    
+    ⬇️
+    
+    🧠 Step-by-Step Pedagogy
+    
+    ⬇️
+    
+    🌿 Hindi → Santali Translation
+    
+    ⬇️
+    
+    🔊 Hindi Voice Output
+    
+    ⬇️
+    
+    ✏️ Practice Question
+    
+    ⬇️
+    
+    📄 Bilingual Worksheet + PDF
+    """
+)
+
+
+# ============================================================
+# SIH DEMO FLOW
+# ============================================================
+
+st.markdown("---")
+
+st.header(
+    "5️⃣ SIH Demo Flow"
+)
+
+st.markdown(
+    """
+    ### 🎬 Recommended 2–3 Minute Demo
+
+    **Step 1 — Teacher asks a question**
+
+    🎤 Speak:
+
+    > 25 और 17 को जोड़ने पर कितना होगा?
+
+    **Step 2 — Speech recognition**
+
+    System converts Hindi speech → Hindi text.
+
+    **Step 3 — Curriculum retrieval**
+
+    System retrieves relevant Class 3 mathematics
+    examples from the local curriculum dataset.
+
+    **Step 4 — AI pedagogy**
+
+    Sarvam-105B generates a child-friendly,
+    step-by-step explanation.
+
+    **Step 5 — Vernacular bridge**
+
+    Hindi explanation → Santali.
+
+    **Step 6 — Voice**
+
+    Hindi explanation is converted into speech.
+
+    **Step 7 — Personalised practice**
+
+    AI generates another question using the same concept.
+
+    **Step 8 — Worksheet**
+
+    Generate five questions across different
+    Class 3 mathematics topics.
+
+    **Step 9 — PDF**
+
+    Download a printable Hindi–Santali worksheet
+    with learning outcomes and answer key.
+    """
+)
+
+
+# ============================================================
+# FOOTER
+# ============================================================
+
+st.markdown("---")
+
+st.markdown(
+    """
+    <div style="text-align:center;color:#777">
+
+    **SIH 2026 Prototype**
+
+    AI-Powered Vernacular Pedagogy & Real-Time Translation
+
+    Hindi → Santali • Class 3 Mathematics
+
+    </div>
+    """,
+    unsafe_allow_html=True
+)
