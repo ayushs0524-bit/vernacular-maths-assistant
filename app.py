@@ -34,6 +34,14 @@ try:
 
     # Safely read the Streamlit secret
     sarvam_key = st.secrets.get("sk_p87syka3_uMW7J8EipungKX3djRZb4a8x")
+    if not sarvam_key:
+    sarvam_error = (
+        "SARVAM_API_KEY is missing from Streamlit Secrets. "
+        "Add a secret named exactly SARVAM_API_KEY."
+    )
+else:
+    sarvam_client = SarvamAI(api_subscription_key=sarvam_key)
+    sarvam_available = True
 
     if not sarvam_key:
 
