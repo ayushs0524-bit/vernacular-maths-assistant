@@ -1057,3 +1057,36 @@ with st.expander("ℹ️ About this prototype"):
         AI services are powered by Sarvam AI.
         """
     )
+    
+# =========================
+# 🎤 VOICE INPUT
+# =========================
+
+st.subheader("🎤 Ask by Voice")
+
+audio = st.audio_input("Record your Hindi maths question")
+
+if audio is not None:
+    try:
+        with st.spinner("🎧 Converting your voice to Hindi text..."):
+
+            audio_bytes = audio.getvalue()
+
+            response = sarvam_client.speech_to_text.transcribe(
+                file=audio_bytes,
+                model="saaras:v3",
+                language_code="hi-IN"
+            )
+
+            spoken_question = response.transcript
+
+        st.success("Voice converted successfully!")
+
+        st.write("### 🗣️ You said:")
+        st.info(spoken_question)
+
+        # Use the recognized question as the main question
+        question = spoken_question
+
+    except Exception as e:
+        st.error(f"Voice processing failed: {e}")
