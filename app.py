@@ -1,8 +1,28 @@
 import re
+import os
+from sarvamai import SarvamAI
 import pandas as pd
 import streamlit as st
+from sarvamai import SarvamAI
 
 DATA_FILE = "Hindi_Santali_Maths_Dataset_Starter.xlsx"
+
+# Sarvam AI client
+sarvam_client = SarvamAI(
+    api_subscription_key=st.secrets["sk_p87syka3_uMW7J8EipungKX3djRZb4a8x"]
+)
+def translate_to_santali(hindi_text):
+    try:
+        response = sarvam_client.text.translate(
+            input=hindi_text,
+            source_language_code="hi-IN",
+            target_language_code="sat-IN",
+            model="sarvam-translate:v1"
+        )
+        return response.translated_text
+
+    except Exception as e:
+        return f"Translation error: {str(e)}"
 
 st.set_page_config(
     page_title="Vernacular Maths Assistant",
