@@ -28,7 +28,7 @@ DATA_FILE = "Hindi_Santali_Maths_Dataset_Starter.xlsx"
 
 try:
     sarvam_client = SarvamAI(
-        api_subscription_key=st.secrets["sk_cn6jd6de_iBpNE7KPIxVsPlZWQexFhyot"]
+        api_subscription_key=st.secrets["sk_p87syka3_uMW7J8EipungKX3djRZb4a8x"]
     )
     sarvam_available = True
 
