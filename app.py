@@ -23,23 +23,36 @@ DATA_FILE = "Hindi_Santali_Maths_Dataset_Starter.xlsx"
 
 
 # ============================================================
-# SARVAM AI CLIENT
+# SARVAM AI CONNECTION
 # ============================================================
 
+sarvam_client = None
+sarvam_available = False
+sarvam_error = None
+
 try:
-    sarvam_key = st.secrets["sk_p87syka3_uMW7J8EipungKX3djRZb4a8x"]
 
-    sarvam_client = SarvamAI(
-        api_subscription_key=sarvam_key
-    )
+    # Safely read the Streamlit secret
+    sarvam_key = st.secrets.get("sk_p87syka3_uMW7J8EipungKX3djRZb4a8x")
 
-    sarvam_available = True
-    sarvam_error = None
+    if not sarvam_key:
+
+        sarvam_error = (
+            "SARVAM_API_KEY is missing from Streamlit Secrets. "
+            "Add a secret named exactly SARVAM_API_KEY."
+        )
+
+    else:
+
+        sarvam_client = SarvamAI(
+            api_subscription_key=sarvam_key
+        )
+
+        sarvam_available = True
+
 
 except Exception as e:
 
-    sarvam_client = None
-    sarvam_available = False
     sarvam_error = str(e)
 
 
@@ -65,7 +78,7 @@ df = load_data()
 
 
 # ============================================================
-# HELPER FUNCTIONS
+# HELPER FUNCTION
 # ============================================================
 
 def clean(value):
@@ -76,23 +89,28 @@ def clean(value):
     return str(value).strip()
 
 
+# ============================================================
+# FIND DATASET MATCH
+# ============================================================
+
 def find_match(text):
 
-    text_norm = re.sub(
+    text_normalized = re.sub(
         r"\s+",
         " ",
         text.strip()
     )
 
-    exact = df[
+    exact_match = df[
         df["Hindi_Text"]
         .astype(str)
         .str.strip()
-        == text_norm
+        == text_normalized
     ]
 
-    if not exact.empty:
-        return exact.iloc[0]
+    if not exact_match.empty:
+
+        return exact_match.iloc[0]
 
     return None
 
@@ -105,28 +123,27 @@ def generate_ai_explanation(question):
 
     if not sarvam_available:
 
-        return None, f"Sarvam API is not configured: {sarvam_error}"
+        return None, sarvam_error
 
 
     system_prompt = """
-You are an expert primary-school mathematics teacher.
+You are an expert Class 3 primary-school mathematics teacher.
 
-Your job is to explain Class 3 Mathematics questions to
-children in simple Hindi.
+Your task is to explain mathematics questions to children
+in very simple and friendly Hindi.
 
 Follow these rules:
 
-1. Use very simple, child-friendly Hindi.
-2. Explain the concept step by step.
-3. Do not use advanced mathematical terminology.
-4. Clearly show the calculation.
-5. Give the final answer clearly.
-6. Keep the explanation concise.
-7. Use familiar examples when useful.
-8. Never invent information that is not required.
-9. Make sure the mathematical answer is correct.
+1. Use simple Class 3 level Hindi.
+2. Explain the idea before giving the final answer.
+3. Show the calculation step by step.
+4. Avoid advanced mathematical terminology.
+5. Use familiar examples when helpful.
+6. Make sure the mathematical answer is correct.
+7. Keep the explanation concise.
+8. Do not add unrelated information.
 
-Format your response like this:
+Use this format:
 
 समझते हैं:
 <simple explanation>
@@ -144,7 +161,7 @@ This is a Class 3 Mathematics question:
 
 {question}
 
-Explain and solve it for a Class 3 student.
+Explain and solve this question for a Class 3 student.
 """
 
 
@@ -172,7 +189,6 @@ Explain and solve it for a Class 3 student.
             reasoning_effort=None
         )
 
-
         explanation = (
             response
             .choices[0]
@@ -189,14 +205,14 @@ Explain and solve it for a Class 3 student.
 
 
 # ============================================================
-# SARVAM HINDI → SANTALI TRANSLATION
+# HINDI → SANTALI TRANSLATION
 # ============================================================
 
 def translate_to_santali(hindi_text):
 
     if not sarvam_available:
 
-        return None, "Sarvam API is not configured correctly."
+        return None, sarvam_error
 
 
     try:
@@ -211,7 +227,6 @@ def translate_to_santali(hindi_text):
 
             model="sarvam-translate:v1"
         )
-
 
         return response.translated_text, None
 
@@ -239,11 +254,12 @@ based on this original question:
 {question}
 
 Rules:
+
 - Keep it suitable for Class 3.
 - Use simple Hindi.
 - Change the numbers.
 - Test the same mathematical concept.
-- Do NOT provide the answer.
+- Do not provide the answer.
 - Return only the question.
 """
 
@@ -257,8 +273,10 @@ Rules:
             messages=[
                 {
                     "role": "system",
-                    "content":
-                    "You create simple Class 3 Mathematics practice questions."
+                    "content": (
+                        "You create simple Class 3 Mathematics "
+                        "practice questions."
+                    )
                 },
                 {
                     "role": "user",
@@ -272,7 +290,6 @@ Rules:
 
             reasoning_effort=None
         )
-
 
         return (
             response
@@ -289,7 +306,7 @@ Rules:
 
 
 # ============================================================
-# MAIN UI
+# MAIN APPLICATION
 # ============================================================
 
 st.title(
@@ -303,7 +320,7 @@ st.caption(
 
 st.info(
     "The system generates a child-friendly Hindi explanation "
-    "using Sarvam AI and then translates it into Santali."
+    "using Sarvam AI and translates it into Santali."
 )
 
 
@@ -317,7 +334,8 @@ question = st.text_area(
 
     placeholder=(
         "उदाहरण: एक टोकरी में 8 आम हैं और "
-        "दूसरी टोकरी में 5 आम हैं। कुल कितने आम हैं?"
+        "दूसरी टोकरी में 5 आम हैं। "
+        "दोनों टोकरियों में कुल कितने आम हैं?"
     ),
 
     height=120
@@ -343,7 +361,7 @@ if st.button(
 
 
     # ========================================================
-    # AI PEDAGOGY
+    # AI HINDI PEDAGOGY
     # ========================================================
 
     st.subheader(
